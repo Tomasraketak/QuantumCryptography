@@ -56,6 +56,7 @@ class App:
         ttk.Label(top, text="Arduino port:").pack(side="left")
         self.port = ttk.Combobox(top, values=ports, width=10)
         self.port.pack(side="left", padx=3)
+        ttk.Button(top, text="🔄", width=3, command=lambda: self.port.config(values=self._ports())).pack(side="left")
         if ports:
             self.port.set(ports[0])
         self.sim = tk.BooleanVar(value=not ports)
@@ -63,7 +64,11 @@ class App:
         self.eve = tk.BooleanVar(value=False)
         ttk.Checkbutton(top, text="Eve poslouchá (simulace)", variable=self.eve).pack(side="left")
         self.btn_conn = ttk.Button(top, text="Připojit", command=self.connect)
-        self.btn_conn.pack(side="left", padx=6)
+        self.btn_conn.pack(side="left", padx=(6, 0))
+        self.btn_disc = ttk.Button(top, text="Odpojit", command=self.disconnect, state="disabled")
+        self.btn_disc.pack(side="left")
+        self.btn_rest = ttk.Button(top, text="↻ Restart", command=self.reconnect, state="disabled")
+        self.btn_rest.pack(side="left", padx=(0, 6))
         ttk.Label(top, text="Qubitů:").pack(side="left")
         self.nq = ttk.Spinbox(top, from_=8, to=512, increment=8, width=5)
         self.nq.set(64)
@@ -241,8 +246,33 @@ class App:
             self.devices = {"alice": dev, "bob": dev}    # jedno Arduino pro oba
             self.btn_conn.config(state="disabled")
             self.btn_start.config(state="normal")
+            self.btn_disc.config(state="normal")
+            self.btn_rest.config(state="normal")
         except Exception as e:
             self.status.config(text=f"Chyba: {e}")
+
+    def disconnect(self):
+        """Zastaví protokol a zavře port (pak ho může použít třeba Serial Monitor)."""
+        if self.session:
+            self.session.stop()
+        dev = self.devices.get("alice")
+        if dev:
+            try:
+                dev.close()
+            except Exception:
+                pass
+        self.devices, self.session, self.keys = {}, None, {}
+        self.btn_conn.config(state="normal")
+        for b in (self.btn_start, self.btn_next, self.btn_disc, self.btn_rest):
+            b.config(state="disabled")
+        self.status.config(text="Odpojeno – port je volný")
+
+    def reconnect(self):
+        """Odpojit a znovu připojit. Otevření portu Arduino zároveň restartuje."""
+        self.disconnect()
+        self.status.config(text="Restartuji Arduino…")
+        self.root.update_idletasks()
+        self.connect()
 
     def manual(self, who, c):
         if who not in self.devices or (self.session and not self.keys):

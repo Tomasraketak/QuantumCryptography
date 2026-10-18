@@ -47,11 +47,15 @@ class SerialDevice:
         self.replies, self.events = queue.Queue(), queue.Queue()
         time.sleep(2.5)                 # Arduino se po otevření portu restartuje
         self.ser.reset_input_buffer()
+        self.closed = False
         threading.Thread(target=self._reader, daemon=True).start()
 
     def _reader(self):
-        while True:
-            line = self.ser.readline().decode(errors="replace").strip()
+        while not self.closed:
+            try:
+                line = self.ser.readline().decode(errors="replace").strip()
+            except Exception:                # port zavřený / Arduino odpojené
+                break
             if not line:
                 continue
             self.log("Arduino", line)
@@ -95,6 +99,7 @@ class SerialDevice:
             self.events.get()
 
     def close(self):
+        self.closed = True
         self.ser.close()
 
 
