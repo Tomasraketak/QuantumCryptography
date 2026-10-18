@@ -212,6 +212,33 @@ Klíčové bity se nikdy nezveřejní. Zveřejněné testovací bity se do klí�
 
 ## 10. Instalace a spuštění GUI
 
+### Nejrychleji (Windows, jeden příkaz)
+
+Otevři **cmd** a vlož tenhle příkaz:
+
+```
+curl -L -o qkd.zip https://github.com/tomasraketak/quantumcryptography/archive/refs/heads/claude/cool-einstein-p05cgt.zip && tar -xf qkd.zip && cd quantumcryptography-claude-cool-einstein-p05cgt && start.bat
+```
+
+Udělá tohle:
+1. stáhne celý projekt jako ZIP a rozbalí ho;
+2. když chybí Python, nainstaluje ho přes `winget`;
+3. nainstaluje nebo aktualizuje všechny knihovny (`pyserial`, `numpy`, `Pillow`, `matplotlib`);
+4. otevře GUI (`pc/qkd_gui.py`), které vše řídí.
+
+Když už projekt staženy máš, stačí ve složce projektu spustit (dvojklikem nebo v cmd):
+
+```
+start.bat
+```
+
+`start.bat` při každém spuštění aktualizuje knihovny. Když je nainstalovaný git, stáhne i nejnovější kód (`git pull`).
+
+> Když se Python teprve nainstaloval a GUI nenaběhne, zavři cmd a spusť `start.bat` znovu.
+> Nové okno cmd už Python najde.
+
+### Ručně (jakýkoli systém)
+
 Potřebuješ Python 3.9+ s tkinter (Windows a macOS ho mají; na Linuxu `sudo apt install python3-tk`).
 
 ```
