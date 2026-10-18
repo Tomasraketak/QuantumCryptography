@@ -13,7 +13,7 @@ Nakonec Alice klíčem zašifruje malý obrázek. Bob ho svým klíčem dešifru
 3. [Architektura: kdo co dělá](#3-architektura-kdo-co-dělá)
 4. [Proč to „nepodvádí“](#4-proč-to-nepodvádí)
 5. [Hardware a zapojení](#5-hardware-a-zapojení)
-6. [Firmware a příkazy Arduin](#6-firmware-a-příkazy-arduin)
+6. [Firmware a příkazy Arduina](#6-firmware-a-příkazy-arduina)
 7. [Průběh jednoho qubitu (časování)](#7-průběh-jednoho-qubitu-časování)
 8. [Sifting, QBER a klíč](#8-sifting-qber-a-klíč)
 9. [Šifrování obrázku](#9-šifrování-obrázku)
@@ -67,8 +67,8 @@ jen pár procent, proto je hranice 11 %.
 | A (bit 1, DA) | +45° | +22,5° | `A` |
 
 **Bob** má HWP jen ve dvou polohách:
-- **báze HV:** HWP 0° (`V`). H jde na detektor 0, V na detektor 1.
-- **báze DA:** HWP +22,5° (`A`). Otočí D na H (detektor 0) a A na V (detektor 1).
+- **báze HV:** HWP 0° (`+`). H jde na detektor 0, V na detektor 1.
+- **báze DA:** HWP +22,5° (`X`). Otočí D na H (detektor 0) a A na V (detektor 1).
   H a V se otočí na diagonálu, takže PBS je rozdělí náhodně 50 : 50.
 
 Pravidlo: **detektor 0 = bit 0, detektor 1 = bit 1.**
@@ -80,20 +80,26 @@ Když laser není potřeba (konec kola, před vypnutím), obě HWP jdou do **nul
 ## 3. Architektura: kdo co dělá
 
 ```
-            USB                                      USB
- ┌────────────────┐   ┌─────────────── PC (Python) ───────────────┐   ┌────────────────┐
- │ Arduino ALICE  │◄──┤  Alice (vlákno)  ◄─ PublicChannel ─►  Bob  ├──►│ Arduino BOB    │
- │ servo + HWP    │   │  soukromé:         (vše se vypisuje  soukr.│   │ HWP + detektory│
- └───────┬────────┘   │  bity, báze,       v GUI)            báze, │   └───────▲────────┘
-         │            │  klíč, obrázek                      měření,│           │
-         │            │                                     klíč   │           │
-         │            └────────────────────────────────────────────┘           │
-         └──────────────────────── laser (kvantový kanál) ─────────────────────┘
+                          ┌─────────────── PC (Python) ───────────────┐
+                          │  Alice (vlákno)  ◄─ PublicChannel ─►  Bob │
+                          │  soukromé:         (vše se vypisuje  soukr.│
+                          │  bity, báze,       v GUI)            báze, │
+                          │  klíč, obrázek                   měření,  │
+                          └──────────────────┬─────────────────klíč───┘
+                                             │ USB (jeden port)
+                          ┌──────────────────┴────────────────────────┐
+                          │ Arduino Uno + CNC shield                  │
+                          │  Alice: servo + HWP (Z)   Bob: HWP (X) +   │
+                          │                           detektory, VALID │
+                          └───────┬───────────────────────────▲───────┘
+                                  └──── laser (kvantový kanál) ┘
 ```
 
 - **PC** dělá všechno chytré: náhodu, sifting, QBER, klíč, šifrování a GUI.
-- **Arduina** jsou „hloupá“. Dostávají jednoduché textové příkazy (natoč HWP, otevři shutter, změř) a odpovídají `OK …`.
-- Mezi Arduiny **není žádný drát**. Jediné, co jde od Alice k Bobovi fyzicky, je laserový paprsek.
+- **Jedno Arduino** slouží Alici i Bobovi. Je „hloupé“: dostává jednoduché textové příkazy (natoč HWP, otevři shutter) a odpovídá `OK …`.
+  Samo od sebe hlásí jen stav detektoru (`L..`, `W`).
+- Alicina a Bobova strana mají **každá své příkazy**. Python je posílá ze dvou oddělených objektů, které o sobě nevědí.
+  Jediné, co jde od Alice k Bobovi fyzicky, je laserový paprsek.
 
 ---
 
@@ -110,7 +116,7 @@ V jednom programu by bylo snadné „omylem“ dát Bobovi Alicin klíč. Kód t
   - testovací bity a počet chyb,
   - verdikt OK/FAIL,
   - **zašifrovaný** obrázek.
-- **Klíč ani nezašifrovaný obrázek kanálem nikdy nejdou.** Bob si klíč skládá jen z odpovědí svého Arduina (detektorů).
+- **Klíč ani nezašifrovaný obrázek kanálem nikdy nejdou.** Bob si klíč skládá jen ze zpráv `L..` od detektorů.
 - GUI ukazuje **klíč Alice a klíč Boba zvlášť** a označí, zda se shodují (✔/✘).
 - Bob dešifruje **svým** klíčem. Když optika nefunguje, obrázek u Boba zůstane šum. Je tak hned vidět, jestli kvantový kanál opravdu funguje.
 
@@ -118,46 +124,63 @@ V jednom programu by bylo snadné „omylem“ dát Bobovi Alicin klíč. Kód t
 
 ## 5. Hardware a zapojení
 
-Obě Arduina: **Arduino Uno + CNC shield V3**. Krokový motor je na ose **X** (driver A4988/DRV8825, 1/16 mikrokrok → 3200 kroků/otáčku).
+**Jedno Arduino Uno + CNC shield V3** pro Alici i Boba. Drivery A4988/DRV8825, 1/16 mikrokrok → 3200 kroků/otáčku.
 
-| | Alice | Bob |
+| co | pin Arduina | kde na shieldu |
 |---|---|---|
-| Krokáč HWP | STEP D2, DIR D5, EN D8 (LOW = zapnuto) | STEP D2, DIR D5, EN D8 |
-| Servo shutteru | **D3** (na shieldu Y.STEP, Y slot bez driveru) | – |
-| Detektor 0 (bit 0, H/D) | – | **D7** |
-| Detektor 1 (bit 1, V/A) | – | **D6** |
-| VALID (měření platné) | – | **D3** – přerušení |
+| HWP **Alice** | STEP D4, DIR D7 | slot **Z** |
+| HWP **Bob** | STEP D2, DIR D5 | slot **X** |
+| Enable driverů | D8 (LOW = zapnuto) | společný |
+| **VALID** (měření platné) | **D3** – přerušení | STEP pin slotu **Y** (slot Y **bez driveru**) |
+| Servo shutteru (Alice) | **D9** (PWM) | header X‑ endstop (je u něj 5V a GND) |
+| Detektor 0 (bit 0, H/D) | **D10** | header Y‑ endstop |
+| Detektor 1 (bit 1, V/A) | **D11** | header Z‑ endstop |
 
 Poznámky:
-- **D3 je na CNC shieldu Y.STEP** (u Alice servo, u Boba VALID). V Y slotu proto **nesmí být driver**. Přerušení umí na Uno jen D2 a D3, a D2 už používá osa X.
+- Přerušení umí na Uno jen D2 a D3. D2 zabírá Bobův motor, proto VALID jde na D3. Ve slotu Y proto **nesmí být driver**.
 - Servo napájej raději z externích 5 V se společnou zemí. Proud serva umí resetovat Arduino.
-- Shutter: `SERVO_OTEVRENO = 90°`, `SERVO_ZAVRENO = 110°` (o 20° dál). Uprav konstanty v `alice/alice.ino` podle mechaniky.
+- Shutter: `SERVO_OTEVRENO = 90°`, `SERVO_ZAVRENO = 110°` (o 20° dál). Uprav konstanty v `qkd/qkd.ino` podle mechaniky.
 - Detektory musí dávat logické úrovně 0/5 V. VALID jde do HIGH, až jsou výstupy detektorů platné.
 
 ---
 
-## 6. Firmware a příkazy Arduin
+## 6. Firmware a příkazy Arduina
 
-Nahraj `alice/alice.ino` do Alice a `bob/bob.ino` do Boba (Arduino IDE, deska *Arduino Uno*).
+Nahraj `qkd/qkd.ino` (Arduino IDE, deska *Arduino Uno*).
 Komunikace: USB serial **115200 Bd**, každý příkaz končí `\n`, odpověď začíná `OK`.
-Po startu Arduino vypíše `ALICE` nebo `BOB`.
+Po startu Arduino vypíše `QKD`.
 
-| příkaz | Alice | Bob | odpověď |
-|---|---|---|---|
-| `V` `H` `D` `A` | HWP na 0° / 45° / −22,5° / +22,5° | stejné (báze HV = `V`, báze DA = `A`) | `OK <poloha v krocích>` |
-| `O` / `C` | otevři / zavři shutter (+250 ms na servo) | – | `OK …` |
-| `M` | – | čeká na VALID↑ (max 2 s) a přečte detektory | `OK 0`, `OK 1`, nebo `OK -` (nic / oba / timeout) |
-| `W` | – | čeká, až VALID = 0, pak ještě 100 ms | `OK` |
-| `ZERO` | aktuální natočení HWP se uloží jako 0 = poloha **V**; od ní se počítají H, D, A | stejné | `OK 0` |
-| `k<stupně>` | pootoč HWP o zadaný úhel vůči současné poloze, např. `k15`, `k-2.5` | stejné | `OK <poloha v krocích>` |
-| `d` | – | výpis `det0=… det1=… valid=…` | text |
-| jiné | – | – | `? <příkaz>` |
+**Příkazy Alice**
 
-Příkazy lze zkoušet i ručně v Serial Monitoru (115200, „Newline“).
+| příkaz | co dělá | odpověď |
+|---|---|---|
+| `V` `H` `D` `A` | HWP Alice na 0° / 45° / −22,5° / +22,5° | `OK <poloha v krocích>` |
+| `O` / `C` | otevři / zavři shutter (+250 ms na servo) | `OK` |
+| `ZERO1` | aktuální natočení HWP Alice se uloží jako 0 = poloha **V** | `OK 0` |
+| `k<stupně>` | pootoč HWP Alice o úhel od současné polohy, např. `k15`, `k-2.5` | `OK <poloha>` |
 
-**Jak Bob měří:** pin VALID má přerušení na náběžnou hranu (`attachInterrupt(..., RISING)`).
-V obsluze přerušení se *okamžitě* přečtou D7 a D6 a nastaví se příznak `zmereno`.
-Příkaz `M` jen počká na příznak. Platné měření je, když svítí **právě jeden** detektor.
+**Příkazy Boba**
+
+| příkaz | co dělá | odpověď |
+|---|---|---|
+| `+` | HWP Boba na 0° (báze HV) | `OK <poloha>` |
+| `X` | HWP Boba na +22,5° (báze DA: D → H, A → V) | `OK <poloha>` |
+| `ZERO2` | aktuální natočení HWP Boba se uloží jako 0 | `OK 0` |
+| `K<stupně>` | pootoč HWP Boba o úhel, např. `K15` | `OK <poloha>` |
+| `d` | ladění: výpis `det0=… det1=… valid=…` | text |
+
+**Zprávy, které Arduino pošle samo (bez příkazu)**
+
+| zpráva | kdy | význam |
+|---|---|---|
+| `L<det0><det1>` | VALID skočil na 1 | stav detektorů: `L10` = bit 0, `L01` = bit 1, `L00`/`L11` = neplatné. Alice teď může zavřít shutter. |
+| `W` | VALID spadl na 0 a uběhlo 100 ms | detektor je v klidu, smí se poslat další qubit |
+
+**Jak se měří:** pin VALID má přerušení na náběžnou hranu (`attachInterrupt(..., RISING)`).
+V obsluze přerušení se *okamžitě* přečtou D10 a D11. `loop()` pak pošle `L..`.
+Potom `loop()` hlídá, kdy VALID spadne na 0, počká 100 ms a pošle `W`.
+
+Když `L` nebo `W` nepřijde do **15 s**, Python vypíše chybu („VALID neskočil na 1…“) a protokol se zastaví.
 
 ---
 
@@ -165,14 +188,16 @@ Příkaz `M` jen počká na příznak. Platné měření je, když svítí **pr�
 
 ```
 Alice PC:  zvol bit+bázi → [V/H/D/A] ─ "READY" ─►
-Bob PC:                    zvol bázi → [V/A] ─ "BOB_READY" ─►
+Bob PC:                    zvol bázi → [+ / X] ─ "BOB_READY" ─►
 Alice:     [O] shutter otevřít ─ "OPEN" ─►
-Bob:       [M] čekej VALID↑ → přečti D7/D6 ─ "MEASURED" ─►
+Arduino:   VALID↑ → pošle L10 / L01         (Bob čeká max 15 s)
+Bob:       přečte bit ─ "MEASURED" ─►
 Alice:     [C] shutter zavřít ─ "CLOSED" ─►
-Bob:       [W] čekej VALID↓ + 100 ms ─ "DARK" ─►   … další qubit
+Arduino:   VALID↓ + 100 ms → pošle W         (Bob čeká max 15 s)
+Bob:       ─ "DARK" ─►   … další qubit
 ```
 
-Za jedno kolo projde 64 qubitů, pak obě strany pošlou `V` (HWP do nuly).
+Za jedno kolo projde 64 qubitů, pak Alice pošle `V` a Bob `+` (HWP do nuly).
 Synchronizační zprávy jdou také veřejným kanálem. Nic tajného neobsahují, jen pořadové číslo qubitu, a GUI je kvůli přehlednosti skrývá.
 
 ---
@@ -246,7 +271,7 @@ pip install -r pc/requirements.txt      # pyserial, numpy, Pillow, matplotlib
 python pc/qkd_gui.py
 ```
 
-1. Připoj obě Arduina USB. V GUI vyber port **Alice** a port **Boba** (např. COM3 / COM4, `/dev/ttyACM0`, `/dev/ttyACM1`).
+1. Připoj Arduino USB a v GUI vyber jeho **port** (např. COM3 nebo `/dev/ttyACM0`).
 2. Klikni **Připojit**. Po otevření portu se Arduino restartuje, GUI čeká ~2,5 s.
 3. Bez hardwaru zaškrtni **Simulace** (volitelně **Eve poslouchá**) a klikni Připojit.
 4. Klikni **START**. Běží kola, dokud nevznikne klíč s QBER ≤ 11 %.
@@ -256,8 +281,8 @@ python pc/qkd_gui.py
 
 ## 11. Popis GUI
 
-- **Horní řádek:** porty, Simulace, Eve poslouchá, Připojit, START.
-- **Ruční ovládání:** tlačítka pro Alici (`V H D A O C ZERO`) a Boba (`V H D A M ZERO d`) a pole pro `k…`, např. `k15` (Enter). Slouží ke kalibraci a testu.
+- **Horní řádek:** port Arduina, Simulace, Eve poslouchá, Připojit, START.
+- **Ruční ovládání:** tlačítka pro Alici (`V H D A O C ZERO1`) a Boba (`+ X ZERO2 d`). Do pole se píše `k15` (Alice) nebo `K15` (Bob) a Enter. Slouží ke kalibraci a testu.
 - **Žlutý pruh:** vysvětluje, co se právě děje.
 - **Tabulka qubitů:** číslo, Alicina báze/bit/úhel HWP/polarizace, Bobova báze/úhel HWP/naměřená hodnota, shoda bází a použití bitu. Barvy:
   - 🟩 zelená = klíč,
@@ -278,13 +303,13 @@ python pc/qkd_gui.py
 ## 12. Kalibrace
 
 1. Zapni laser a otevři shutter (ručně `O`).
-2. Bob: ručně `V`, Alice: pootáčej HWP příkazy `k2` / `k-2` (jemněji `k0.5`), dokud detektor 1 nesvítí nejsilněji (`d` ukáže stav). Pak dej Alici **`ZERO`**.
-3. Stejně nastav Bobovu HWP, aby pro Alicino `V` svítil čistě detektor 1. Pak dej Bobovi **`ZERO`**.
+2. Bob: ručně `+`, Alice: pootáčej HWP příkazy `k2` / `k-2` (jemněji `k0.5`), dokud nesvítí čistě detektor 1 (`d` ukáže stav). Pak dej **`ZERO1`**.
+3. Stejně nastav Bobovu HWP příkazy `K…`, aby pro Alicino `V` svítil čistě detektor 1. Pak dej **`ZERO2`**.
 4. Ověř:
    - Alice `H` → detektor 0;
    - Alice `D` + Bob `A` → detektor 0;
    - Alice `A` + Bob `A` → detektor 1.
-5. Před vypnutím pošli oběma **`V`**, aby po zapnutí začínaly z nuly. Arduino si polohu nepamatuje, po zapnutí bere aktuální polohu jako 0.
+5. Před vypnutím pošli **`V`** (Alice) a **`+`** (Bob), aby po zapnutí začínaly z nuly. Arduino si polohu nepamatuje, po zapnutí bere aktuální polohu jako 0.
 
 Když nesedí směr otáčení nebo počet kroků, uprav `KROKU_NA_OTACKU` (3200 = 200 kroků × 16 mikrokroků) nebo prohoď vodiče cívky.
 
@@ -292,7 +317,7 @@ Když nesedí směr otáčení nebo počet kroků, uprav `KROKU_NA_OTACKU` (3200
 
 ## 13. Simulace a Eve
 
-`SimOptics` v `pc/qkd_core.py` nahradí obě Arduina a fyziku. Pravděpodobnost bitu 1 je cos²(2·HWP_Bob − polarizace).
+`SimOptics` v `pc/qkd_core.py` nahradí Arduino a fyziku. Při `O` pošle `L..`, při `C` pošle `W`, stejně jako skutečný hardware. Pravděpodobnost bitu 1 je cos²(2·HWP_Bob − polarizace).
 Přidává 2 % šumu a 5 % ztrát.
 
 Se zaškrtnutým **Eve poslouchá** Eve každý qubit změří v náhodné bázi a pošle dál nový.
@@ -306,8 +331,7 @@ Výsledky simulace:
 ## 14. Struktura souborů
 
 ```
-alice/alice.ino     firmware Alice (servo + HWP, příkazový interpret)
-bob/bob.ino         firmware Boba (HWP + detektory s přerušením)
+qkd/qkd.ino         firmware jednoho Arduina pro Alici i Boba
 pc/qkd_core.py      protokol BB84: Alice, Bob, PublicChannel, SerialDevice, SimOptics
 pc/qkd_gui.py       GUI (tkinter) – jen zobrazuje události
 pc/qcrypt.py        komprese obrázku a XOR šifra
@@ -321,9 +345,9 @@ pc/requirements.txt závislosti
 | problém | řešení |
 |---|---|
 | „žádná odpověď na …“ | špatný port, nebo je otevřený Serial Monitor (port může mít jen jeden program) |
-| Bob vrací stále `OK -` | VALID nepřichází: zkontroluj D3, Y slot bez driveru, příkaz `d` |
+| „VALID neskočil na 1 do 15 s“ | VALID nepřichází: zkontroluj D3, slot Y bez driveru, laser a shutter, příkaz `d` |
 | QBER vysoký i bez Eve | špatná kalibrace HWP (kap. 12), odrazy, okolní světlo |
-| motor se netočí | EN musí být LOW, napájení shieldu 12 V, driver v X slotu |
+| motor se netočí | EN musí být LOW, napájení shieldu 12 V, drivery ve slotech X a Z |
 | servo resetuje Arduino | napájej servo zvlášť, se společnou zemí |
-| `W` se zasekne | VALID zůstává HIGH: detektor stále hlásí světlo, zkontroluj shutter |
+| „VALID nespadl na 0 do 15 s“ | detektor stále hlásí světlo: zavírá se shutter? |
 | Linux: chyba přístupu k portu | `sudo usermod -a -G dialout $USER` a znovu se přihlásit |

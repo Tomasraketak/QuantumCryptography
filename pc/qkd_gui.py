@@ -1,7 +1,7 @@
 """QKD demonstrátor BB84 - jedno okno pro Alici i Boba.
 
 Spuštění:  python qkd_gui.py
-Obě Arduina připoj USB do jednoho PC, vyber porty a dej Připojit.
+Arduino (jedno pro Alici i Boba) připoj USB, vyber port a dej Připojit.
 Bez hardwaru zaškrtni "Simulace" (a případně "Eve poslouchá").
 
 Alice a Bob jsou v kódu oddělení (qkd_core.Alice / qkd_core.Bob). GUI je jen
@@ -20,11 +20,11 @@ from qkd_core import (KEY_BITS, N_QUBITS, QBER_LIMIT, SerialDevice, Session, Sim
 BASIS = ["HV (+)", "DA (×)"]
 POL = {(0, 0): "↔ H", (0, 1): "↕ V", (1, 0): "⤢ D", (1, 1): "⤡ A"}
 HWP = {(0, 0): "45°", (0, 1): "0°", (1, 0): "-22.5°", (1, 1): "+22.5°"}
-BOB_HWP = ["0°", "+22.5°"]
+BOB_HWP = ["+  0°", "X  +22.5°"]
 DET = {0: "detektor 0 → 0", 1: "detektor 1 → 1", None: "nic (ztráta)"}
 PREVIEW = 190
 
-INTRO = ("1) Připoj obě Arduina (nebo zapni simulaci) a stiskni START.\n"
+INTRO = ("1) Připoj Arduino (nebo zapni simulaci) a stiskni START.\n"
          "PC za Alici náhodně volí bit a bázi a natáčí její HWP, za Boba náhodně volí bázi. "
          "Bob se bit dozví JEN z toho, na kterém detektoru se objeví laser.")
 
@@ -53,14 +53,11 @@ class App:
         top = ttk.Frame(self.root, padding=6)
         top.pack(fill="x")
         ports = self._ports()
-        ttk.Label(top, text="Alice port:").pack(side="left")
-        self.alice_port = ttk.Combobox(top, values=ports, width=10)
-        self.alice_port.pack(side="left", padx=3)
-        ttk.Label(top, text="Bob port:").pack(side="left")
-        self.bob_port = ttk.Combobox(top, values=ports, width=10)
-        self.bob_port.pack(side="left", padx=3)
-        if len(ports) >= 2:
-            self.alice_port.set(ports[0]); self.bob_port.set(ports[1])
+        ttk.Label(top, text="Arduino port:").pack(side="left")
+        self.port = ttk.Combobox(top, values=ports, width=10)
+        self.port.pack(side="left", padx=3)
+        if ports:
+            self.port.set(ports[0])
         self.sim = tk.BooleanVar(value=not ports)
         ttk.Checkbutton(top, text="Simulace (bez HW)", variable=self.sim).pack(side="left", padx=6)
         self.eve = tk.BooleanVar(value=False)
@@ -75,14 +72,14 @@ class App:
         # ruční ovládání / kalibrace
         man = ttk.Frame(self.root, padding=(6, 0))
         man.pack(fill="x")
-        for who, cmds in (("alice", "V H D A O C ZERO"), ("bob", "V H D A M ZERO d")):
+        for who, cmds in (("alice", "V H D A O C ZERO1"), ("bob", "+ X ZERO2 d")):
             ttk.Label(man, text=f"Ručně {who.capitalize()}:").pack(side="left", padx=(8, 2))
             for c in cmds.split():
-                ttk.Button(man, text=c, width=6, command=lambda w=who, c=c: self.manual(w, c)).pack(side="left")
+                ttk.Button(man, text=c, width=7, command=lambda w=who, c=c: self.manual(w, c)).pack(side="left")
             e = ttk.Entry(man, width=8)
             e.pack(side="left", padx=2)
             e.bind("<Return>", lambda ev, w=who, e=e: self.manual(w, e.get()))
-        ttk.Label(man, text="(pole: např. 'k15' = pootoč o 15°, 'k-2.5' + Enter)").pack(side="left", padx=6)
+        ttk.Label(man, text="(pole: Alice 'k15', Bob 'K15' = pootoč o 15° + Enter)").pack(side="left", padx=6)
 
         self.explain = tk.Label(self.root, text=INTRO, font=("Segoe UI", 11), wraplength=1250,
                                 justify="left", padx=8, pady=6, bg="#fff8dc", relief="groove")
@@ -219,14 +216,13 @@ class App:
     def connect(self):
         try:
             if self.sim.get():
-                optics = SimOptics(eve=self.eve.get)
-                self.devices = {"alice": optics.device("alice"), "bob": optics.device("bob")}
+                dev = SimOptics(eve=self.eve.get)
                 self.status.config(text="Simulace připravena (bez hardwaru)")
             else:
                 log = lambda who, t: self.events.put(("HWLOG", who, t))
-                self.devices = {"alice": SerialDevice(self.alice_port.get(), "Alice", log),
-                                "bob": SerialDevice(self.bob_port.get(), "Bob", log)}
-                self.status.config(text="Arduina připojena")
+                dev = SerialDevice(self.port.get(), log)
+                self.status.config(text="Arduino připojeno")
+            self.devices = {"alice": dev, "bob": dev}    # jedno Arduino pro oba
             self.btn_conn.config(state="disabled")
             self.btn_start.config(state="normal")
         except Exception as e:

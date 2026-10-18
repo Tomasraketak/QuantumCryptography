@@ -8,8 +8,9 @@ Pravidla, aby se nešvindlovalo:
   * Bob si klíč skládá jen z vlastních měření. Když kvantový kanál nefunguje,
     Bob má jiný klíč a obrázek se mu nerozšifruje.
 
-Hardware: AliceHW / BobHW posílají příkazy Arduinům (V H D A O C M W ZERO k).
-Simulace: SimOptics nahrazuje obě Arduina i optiku (volitelně s Eve).
+Hardware: jedno Arduino pro oba (SerialDevice). Alice posílá V H D A O C,
+Bob + X; Arduino samo hlásí L<d0><d1> (VALID na 1) a W (VALID na 0).
+Simulace: SimOptics nahrazuje Arduino i optiku (volitelně s Eve).
 """
 import math
 import queue
@@ -23,46 +24,80 @@ N_QUBITS = 64
 KEY_BITS = 16
 MIN_TEST = 8
 QBER_LIMIT = 0.11
+VALID_TIMEOUT = 15     # s, déle bez L / W = chyba
 
 # stav HWP pro (báze, bit); báze 0 = HV, 1 = DA; bit 0 = H/D, bit 1 = V/A
 ALICE_CMD = {(0, 0): "H", (0, 1): "V", (1, 0): "D", (1, 1): "A"}
-BOB_CMD = {0: "V", 1: "A"}        # báze HV = HWP 0°, báze DA = HWP +22.5°
+BOB_CMD = {0: "+", 1: "X"}        # báze HV = HWP 0°, báze DA = HWP +22.5°
 
 
 # =================================================================== hardware
 class SerialDevice:
-    """Jedno Arduino na USB: pošle příkaz a počká na odpověď 'OK ...'."""
+    """Jedno Arduino na USB pro Alici i Boba.
 
-    def __init__(self, port, name, log):
+    cmd(c)       pošle příkaz a počká na odpověď 'OK ...'
+    wait(kind)   počká na zprávu, kterou Arduino pošle samo: L<d0><d1> nebo W
+    """
+
+    def __init__(self, port, log):
         import serial
-        self.name, self.log = name, log
-        self.ser = serial.Serial(port, 115200, timeout=6)
+        self.log = log
+        self.ser = serial.Serial(port, 115200, timeout=0.2)
         self.lock = threading.Lock()
+        self.replies, self.events = queue.Queue(), queue.Queue()
         time.sleep(2.5)                 # Arduino se po otevření portu restartuje
         self.ser.reset_input_buffer()
+        threading.Thread(target=self._reader, daemon=True).start()
+
+    def _reader(self):
+        while True:
+            line = self.ser.readline().decode(errors="replace").strip()
+            if not line:
+                continue
+            self.log("Arduino", line)
+            if line[0] in "LW":
+                self.events.put(line)        # samo od Arduina (VALID)
+            else:
+                self.replies.put(line)       # odpověď na příkaz
 
     def cmd(self, c):
         with self.lock:
             self.ser.write((c + "\n").encode())
-            while True:
-                line = self.ser.readline().decode(errors="replace").strip()
-                if not line:
-                    raise IOError(f"{self.name}: žádná odpověď na '{c}'")
-                self.log(self.name, f"{c} -> {line}")
-                if line.startswith("OK") or line.startswith("?") or "=" in line:
-                    return line[3:] if line.startswith("OK ") else line
+            self.log("PC", c)
+            try:
+                line = self.replies.get(timeout=6)
+            except queue.Empty:
+                raise IOError(f"žádná odpověď na '{c}'")
+            return line[3:] if line.startswith("OK ") else line
+
+    def wait(self, kind, timeout=VALID_TIMEOUT):
+        while True:
+            try:
+                line = self.events.get(timeout=timeout)
+            except queue.Empty:
+                what = "neskočil na 1 (chybí L)" if kind == "L" else "nespadl na 0 (chybí W)"
+                raise IOError(f"VALID {what} do {timeout} s – zkontroluj detektor a laser")
+            if line[0] == kind:
+                return line[1:]
+
+    def clear(self):
+        while not self.events.empty():
+            self.events.get()
 
     def close(self):
         self.ser.close()
 
 
-class SimOptics:
-    """Simulace obou Arduin a optiky: laser, HWP, PBS, detektory, (Eve)."""
+class SimOptics(SerialDevice):
+    """Simulace Arduina i optiky: laser, HWP, PBS, detektory, (Eve)."""
+
+    ANGLE = {"V": ("alice", 0), "H": ("alice", 45), "D": ("alice", -22.5), "A": ("alice", 22.5),
+             "+": ("bob", 0), "X": ("bob", 22.5)}
 
     def __init__(self, eve=lambda: False, noise=0.02, loss=0.05, delay=0.05):
         self.eve, self.noise, self.loss, self.delay = eve, noise, loss, delay
-        self.alice_hwp = self.bob_hwp = 0.0
-        self.shutter_open = False
+        self.hwp = {"alice": 0.0, "bob": 0.0}
+        self.events = queue.Queue()
 
     @staticmethod
     def _measure(pol, hwp):
@@ -70,36 +105,27 @@ class SimOptics:
         out = 2 * hwp - pol
         return 1 if random.random() < math.cos(math.radians(out)) ** 2 else 0
 
-    def device(self, who):
-        return _SimDevice(self, who)
-
-
-class _SimDevice:
-    ANGLE = {"V": 0, "H": 45, "D": -22.5, "A": 22.5}
-
-    def __init__(self, optics, who):
-        self.o, self.who = optics, who
-
     def cmd(self, c):
-        o = self.o
-        time.sleep(o.delay)
+        time.sleep(self.delay)
         if c in self.ANGLE:
-            setattr(o, f"{self.who}_hwp", self.ANGLE[c])
-        elif c == "O":
-            o.shutter_open = True
-        elif c == "C":
-            o.shutter_open = False
-        elif c == "M":
-            if not o.shutter_open or random.random() < o.loss:
-                return "-"
-            pol = 2 * o.alice_hwp                  # polarizace za HWP Alice
-            if o.eve():                            # Eve: změří a pošle znovu
-                eb = random.randint(0, 1)
-                ebit = o._measure(pol, [0, 22.5][eb])
-                pol = {(0, 0): 90, (0, 1): 0, (1, 0): -45, (1, 1): 45}[(eb, ebit)]
-            bit = o._measure(pol, o.bob_hwp)
-            return str(bit ^ (random.random() < o.noise))
-        return ""
+            who, a = self.ANGLE[c]
+            self.hwp[who] = a
+        elif c == "O":                       # laser svítí -> detektor -> L
+            self.events.put("L" + self._flash())
+        elif c == "C":                       # laser zhasl -> W
+            self.events.put("W")
+        return "OK"
+
+    def _flash(self):
+        if random.random() < self.loss:
+            return "00"
+        pol = 2 * self.hwp["alice"]                # polarizace za HWP Alice
+        if self.eve():                             # Eve: změří a pošle znovu
+            eb = random.randint(0, 1)
+            ebit = self._measure(pol, [0, 22.5][eb])
+            pol = {(0, 0): 90, (0, 1): 0, (1, 0): -45, (1, 1): 45}[(eb, ebit)]
+        bit = self._measure(pol, self.hwp["bob"]) ^ (random.random() < self.noise)
+        return "01" if bit else "10"
 
     def close(self):
         pass
@@ -227,17 +253,18 @@ class Bob(threading.Thread):
             b = random.randint(0, 1)
             self.hw.cmd(BOB_CMD[b])
             bases.append(b)
+            self.hw.clear()                          # staré L/W zahodit
             self.ch.send("bob", "alice", "BOB_READY", i)
             self.ch.recv("bob", "OPEN")
-            r = self.hw.cmd("M")                     # čeká na VALID, čte detektory
-            res = None if r.strip() == "-" else int(r)
+            d = self.hw.wait("L")                    # VALID na 1: "10" nebo "01"
+            res = {"10": 0, "01": 1}.get(d)          # jinak ztráta
             results.append(res)
             self.ev.put(("B", i, b, res))
             self.ch.send("bob", "alice", "MEASURED", i)
             self.ch.recv("bob", "CLOSED")
-            self.hw.cmd("W")                         # VALID = 0 + 100 ms
+            self.hw.wait("W")                        # VALID = 0 + 100 ms
             self.ch.send("bob", "alice", "DARK", i)
-        self.hw.cmd("V")                             # HWP do nuly
+        self.hw.cmd("+")                             # HWP do nuly
         valid = [r is not None for r in results]
         self.ch.send("bob", "alice", "BOB_BASES", (bases, valid),
                      f"báze {bits_str(bases)}\nzachyceno {bits_str(int(v) for v in valid)}")
