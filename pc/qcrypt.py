@@ -1,4 +1,8 @@
-"""16bitove symetricke sifrovani (XOR s klicem), komprese obrazku a ramec prenosu."""
+"""Šifrování obrázku AES-128 (CTR) klíčem odvozeným z 16bitového QKD klíče + komprese obrázku."""
+import hashlib
+import os
+
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 import numpy as np
 from PIL import Image
 
@@ -12,13 +16,20 @@ MODES = {
 }
 
 
-def xor16(data: bytes, key: int) -> bytes:
-    """XOR kazdeho 16bit slova (big-endian) s klicem. Sifrovani = desifrovani.
-    Funguje i na zacatek dat (prefix) - diky tomu lze desifrovat prubezne."""
-    buf = np.frombuffer(data, np.uint8).copy()
-    buf[0::2] ^= (key >> 8) & 0xFF
-    buf[1::2] ^= key & 0xFF
-    return buf.tobytes()
+def derive_key(key16: int) -> bytes:
+    """16bitový klíč z QKD -> 128bitový klíč pro AES (SHA-256, prvních 16 B)."""
+    return hashlib.sha256(key16.to_bytes(2, "big")).digest()[:16]
+
+
+def new_nonce() -> bytes:
+    """Náhodné číslo pro režim CTR. Není tajné, posílá se veřejně."""
+    return os.urandom(16)
+
+
+def cipher(key16: int, nonce: bytes):
+    """AES-128 v režimu CTR. Šifrování i dešifrování je stejné: .update(bajty).
+    Funguje po kouscích - Bob může dešifrovat průběžně, jak data přicházejí."""
+    return Cipher(algorithms.AES(derive_key(key16)), modes.CTR(nonce)).encryptor()
 
 
 def payload_len(w: int, h: int, mode: int) -> int:

@@ -2,3 +2,4 @@ pyserial
 numpy
 Pillow
 matplotlib
+cryptography

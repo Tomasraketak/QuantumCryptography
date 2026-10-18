@@ -260,13 +260,15 @@ QBER a hranice 11 % se dál ukazují pro orientaci. Konstanty `NOISE` a `EVE_ERR
    - **1 bit** černobílý (nejméně dat),
    - **8 bit** odstíny šedi,
    - **24 bit** barevné RGB.
-2. Data se zašifrují **XOR se 16bitovým klíčem**: každý pár bajtů se XORuje s horním a dolním bajtem klíče (`pc/qcrypt.py`, `xor16`).
-   Šifrování a dešifrování je stejná operace.
-3. Zašifrovaná data jdou veřejným kanálem zhruba ve 100 kouscích (aspoň 32 bajtů). Bob dešifruje průběžně, takže je vidět, jak obrázek přibývá.
+2. Data se zašifrují klasickou šifrou **AES-128 v režimu CTR** (`pc/qcrypt.py`):
+   - klíč pro AES = prvních 16 bajtů z **SHA-256(16bitový QKD klíč)**, takže jediné tajemství je klíč z kvantového kanálu;
+   - Alice vygeneruje náhodný **nonce** (16 B). Ten není tajný a posílá se veřejně v `IMG_HEADER`.
+3. Zašifrovaná data jdou veřejným kanálem zhruba ve 100 kouscích. Bob dešifruje průběžně svým klíčem (CTR to umí po kouscích).
+   - Zašifrovaný obrázek vypadá jako čistý šum, nejsou vidět ani obrysy.
+   - Když se klíče Alice a Boba liší, Bob dostane také jen šum.
 
-> Pozn.: opakovaný 16bitový klíč není bezpečná šifra. U velkých ploch stejné barvy je obrys vidět i v zašifrované verzi.
-> Pro demonstraci je to výhoda: je názorně vidět rozdíl mezi správným a špatným klíčem.
-> Skutečná QKD by vyrobila tolik bitů klíče, kolik je dat (one-time pad).
+> Pozn.: 16 bitů je jen 65 536 možných klíčů, takže Eve by je mohla všechny vyzkoušet.
+> Pro demonstraci to stačí. Skutečná QKD vyrobí klíč o stovkách bitů.
 
 ---
 
@@ -283,7 +285,7 @@ curl -L -o qkd.zip https://github.com/tomasraketak/quantumcryptography/archive/r
 Udělá tohle:
 1. stáhne celý projekt jako ZIP a rozbalí ho;
 2. když chybí Python, nainstaluje ho přes `winget`;
-3. nainstaluje nebo aktualizuje všechny knihovny (`pyserial`, `numpy`, `Pillow`, `matplotlib`);
+3. nainstaluje nebo aktualizuje všechny knihovny (`pyserial`, `numpy`, `Pillow`, `matplotlib`, `cryptography`);
 4. otevře GUI (`pc/qkd_gui.py`), které vše řídí.
 
 Když už projekt staženy máš, stačí ve složce projektu spustit (dvojklikem nebo v cmd):
@@ -302,7 +304,7 @@ start.bat
 Potřebuješ Python 3.9+ s tkinter (Windows a macOS ho mají; na Linuxu `sudo apt install python3-tk`).
 
 ```
-pip install -r pc/requirements.txt      # pyserial, numpy, Pillow, matplotlib
+pip install -r pc/requirements.txt      # pyserial, numpy, Pillow, matplotlib, cryptography
 python pc/qkd_gui.py
 ```
 
@@ -370,7 +372,7 @@ Výsledky simulace:
 qkd/qkd.ino         firmware jednoho Arduina pro Alici i Boba
 pc/qkd_core.py      protokol BB84: Alice, Bob, PublicChannel, SerialDevice, SimOptics
 pc/qkd_gui.py       GUI (tkinter) – jen zobrazuje události
-pc/qcrypt.py        komprese obrázku a XOR šifra
+pc/qcrypt.py        komprese obrázku a šifra AES-128-CTR
 pc/requirements.txt závislosti
 ```
 

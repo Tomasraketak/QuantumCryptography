@@ -156,7 +156,7 @@ class App:
             self.tree.tag_configure(tag, background=col)
 
         # --- obrázek
-        imf = ttk.LabelFrame(self.root, text="Šifrovaný přenos obrázku (XOR každých 16 bitů s klíčem)",
+        imf = ttk.LabelFrame(self.root, text="Šifrovaný přenos obrázku (AES-128, klíč odvozený z 16bitového QKD klíče)",
                              style="H.TLabelframe", padding=6)
         imf.pack(side="bottom", fill="x", padx=6, pady=6, before=self.mid)   # při malém okně se zmenší tabulka, ne tohle
         ctl = ttk.Frame(imf)
@@ -485,28 +485,47 @@ class App:
         for v in ("aenc", "benc", "bdec"):
             self._show(v, blank)
         self.session.send_image(self.image, size, mode)
-        self.say("Alice rozdělí obrázek na 16bitová slova a každé XORuje SVÝM klíčem. Veřejným kanálem jde jen "
-                 "šifrovaný šum – Eve bez klíče nic nezjistí. Bob dešifruje SVÝM klíčem: když kvantový kanál "
-                 "fungoval, klíče jsou stejné a obrázek se objeví.")
+        self.say("Alice ze svého 16bitového klíče udělá (SHA-256) 128bitový klíč a obrázek zašifruje AES. "
+                 "Veřejným kanálem jde jen šum – Eve bez klíče nic nezjistí. Bob dešifruje SVÝM klíčem: když "
+                 "kvantový kanál fungoval, klíče jsou stejné a obrázek se objeví.")
 
     def on_ALICE_IMG(self, preview, enc, size, mode):
         self.alice_img = (enc, size, mode)
         self._show("orig", preview)
 
+    # náhledy překreslujeme nejvýš 10x za sekundu, jinak by velký obrázek zasekl okno
+    def _redraw_later(self):
+        if not getattr(self, "_redraw_pending", False):
+            self._redraw_pending = True
+            self.root.after(100, self._redraw)
+
+    def _redraw(self):
+        self._redraw_pending = False
+        if getattr(self, "_sent", None) is not None:
+            enc, size, mode = self.alice_img
+            self.progress["value"] = 100 * self._sent / len(enc)
+            self._show("aenc", qcrypt.decode_image(enc[:self._sent], size, size, mode))
+            self._sent = None
+        if getattr(self, "_bob", None) is not None:
+            enc, dec, size, mode = self._bob
+            self._show("benc", qcrypt.decode_image(enc, size, size, mode))
+            self._show("bdec", qcrypt.decode_image(dec, size, size, mode))
+            self._bob = None
+
     def on_ALICE_SENT(self, n):
-        enc, size, mode = self.alice_img
-        self.progress["value"] = 100 * n / len(enc)
-        self._show("aenc", qcrypt.decode_image(enc[:n], size, size, mode))
+        self._sent = n
+        self._redraw_later()
 
     def on_BOB_IMG(self, enc, dec, size, mode):
-        self._show("benc", qcrypt.decode_image(enc, size, size, mode))
-        self._show("bdec", qcrypt.decode_image(dec, size, size, mode))
+        self._bob = (enc, dec, size, mode)
+        self._redraw_later()
 
     def on_BOB_IMG_DONE(self):
+        self._redraw()
         self.btn_send.config(state="normal")
         if self.keys.get("alice") == self.keys.get("bob"):
-            self.say("✔ Bob přijal celý obrázek a XORoval ho svým klíčem → dostal originál. "
-                     "(XOR dvakrát stejným klíčem = původní data.) Zkus jiné rozlišení nebo barevnou hloubku.")
+            self.say("✔ Bob přijal celý obrázek a dešifroval ho AES svým klíčem → dostal originál. "
+                     "Zkus jiné rozlišení nebo barevnou hloubku.")
         else:
             self.say("✘ Bobův klíč se liší od Alicina → obrázek zůstal nečitelný. Kvantový kanál nefungoval správně.")
 

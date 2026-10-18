@@ -264,9 +264,11 @@ class Alice(threading.Thread):
 
     def send_image(self, img, size, mode):
         data, preview = qcrypt.encode_image(img, size, mode)
-        enc = qcrypt.xor16(data, self.key)           # šifruje SVÝM klíčem
+        nonce = qcrypt.new_nonce()
+        enc = qcrypt.cipher(self.key, nonce).update(data)   # AES SVÝM klíčem
         self.ev.put(("ALICE_IMG", preview, enc, size, mode))
-        self.ch.send("alice", "bob", "IMG_HEADER", (size, mode), f"{size}x{size}, režim {mode}")
+        self.ch.send("alice", "bob", "IMG_HEADER", (size, mode, nonce),
+                     f"{size}x{size}, režim {mode}, nonce {nonce.hex()}")
         step = max(32, len(enc) // 100 // 2 * 2)     # ~100 kousků, sudá délka
         for i in range(0, len(enc), step):
             chunk = enc[i:i + step]
@@ -340,14 +342,17 @@ class Bob(threading.Thread):
             self.key = int(bits_str(sifted[:KEY_BITS]), 2)
 
     def receive_image(self):
-        size, mode = self.ch.recv("bob", "IMG_HEADER")
+        size, mode, nonce = self.ch.recv("bob", "IMG_HEADER", timeout=None)  # obrázek může přijít kdykoli
+        aes = qcrypt.cipher(self.key, nonce)         # dešifruje SVÝM klíčem
         enc = dec = b""
         while True:
             kind, data = self.ch.box["bob"].get()
+            if kind == "STOP":
+                raise SystemExit
             if kind == "IMG_END":
                 break
             enc += data
-            dec += qcrypt.xor16(data, self.key)      # dešifruje SVÝM klíčem
+            dec += aes.update(data)
             self.ev.put(("BOB_IMG", enc, dec, size, mode))
         self.ev.put(("BOB_IMG_DONE",))
 
