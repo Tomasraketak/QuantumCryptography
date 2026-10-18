@@ -34,7 +34,9 @@ const byte STEP_PIN[2] = {4, 2};
 const byte DIR_PIN[2]  = {7, 5};
 long poloha[2] = {0, 0};             // poloha HWP v krocich (0 = V)
 
-const long KROKU_NA_OTACKU = 3200;   // 200 kroku * 16 mikrokroku
+// kroky na otacku pro kazdy motor: 200 kroku * mikrokrokovani driveru
+// Alice 1/16 = 3200, Bob 1/32 = 6400 (Bob se tocil 2x vic -> jiny jumper)
+const long KROKU_NA_OTACKU[2] = {3200, 6400};
 const int  SERVO_OTEVRENO  = 0;
 const int  SERVO_ZAVRENO   = 90;     // o 90° dal = laser zakryty
 
@@ -48,7 +50,8 @@ void onValid() {
   det1 = digitalRead(DET1_PIN);
   zablesk = true;
 }
-bool sviti = false;                  // poslali jsme L a cekame na pad VALID
+bool sviti = false;
+bool otevreno = false;               // shutter otevreny? (jinak preruseni ignorujeme)                  // poslali jsme L a cekame na pad VALID
 
 void krokuj(byte m, long kroky) {
   digitalWrite(DIR_PIN[m], kroky > 0 ? HIGH : LOW);
@@ -60,11 +63,11 @@ void krokuj(byte m, long kroky) {
 }
 
 void natocHWP(byte m, float stupne) {
-  krokuj(m, lround(stupne * KROKU_NA_OTACKU / 360) - poloha[m]);
+  krokuj(m, lround(stupne * KROKU_NA_OTACKU[m] / 360) - poloha[m]);
 }
 
-long stupneNaKroky(String s) {
-  return lround(s.toFloat() * KROKU_NA_OTACKU / 360);
+long stupneNaKroky(byte m, String s) {
+  return lround(s.toFloat() * KROKU_NA_OTACKU[m] / 360);
 }
 
 void setup() {
@@ -85,6 +88,7 @@ void setup() {
 
 void loop() {
   // 1) detektor se rozsvitil -> pošli L<det0><det1>
+  if (zablesk && !otevreno) zablesk = false;     // laser zakryty = sum, ignoruj
   if (zablesk) {
     zablesk = false;
     sviti = true;
@@ -107,8 +111,8 @@ void loop() {
     Serial.print(" valid="); Serial.println(digitalRead(VALID_PIN));
     return;
   }
-  if (p == "O") { shutter.write(SERVO_OTEVRENO); delay(500); Serial.println("OK"); return; }
-  if (p == "C") { shutter.write(SERVO_ZAVRENO);  delay(500); Serial.println("OK"); return; }
+  if (p == "O") { otevreno = true;  shutter.write(SERVO_OTEVRENO); delay(500); Serial.println("OK"); return; }
+  if (p == "C") { otevreno = false; shutter.write(SERVO_ZAVRENO);  delay(500); Serial.println("OK"); return; }
 
   byte m;                                       // ktery motor
   if      (p == "V") { m = 0; natocHWP(0, 0); }
@@ -116,11 +120,11 @@ void loop() {
   else if (p == "D") { m = 0; natocHWP(0, -22.5); }
   else if (p == "A") { m = 0; natocHWP(0, 22.5); }
   else if (p == "ZERO1") { m = 0; poloha[0] = 0; }
-  else if (p.startsWith("k")) { m = 0; krokuj(0, stupneNaKroky(p.substring(1))); }
+  else if (p.startsWith("k")) { m = 0; krokuj(0, stupneNaKroky(0, p.substring(1))); }
   else if (p == "+") { m = 1; natocHWP(1, 0); }
   else if (p == "X") { m = 1; natocHWP(1, 22.5); }
   else if (p == "ZERO2") { m = 1; poloha[1] = 0; }
-  else if (p.startsWith("K")) { m = 1; krokuj(1, stupneNaKroky(p.substring(1))); }
+  else if (p.startsWith("K")) { m = 1; krokuj(1, stupneNaKroky(1, p.substring(1))); }
   else { Serial.println("? " + p); return; }
 
   Serial.print("OK ");

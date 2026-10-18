@@ -124,7 +124,7 @@ V jednom programu by bylo snadné „omylem“ dát Bobovi Alicin klíč. Kód t
 
 ## 5. Hardware a zapojení
 
-**Jedno Arduino Uno + CNC shield V3** pro Alici i Boba. Drivery A4988/DRV8825, 1/16 mikrokrok → 3200 kroků/otáčku.
+**Jedno Arduino Uno + CNC shield V3** pro Alici i Boba. Drivery A4988/DRV8825: Alice 1/16 mikrokrok (3200 kroků/otáčku), Bob 1/32 (6400). Jiné nastavení jumperů → uprav `KROKU_NA_OTACKU` v `qkd/qkd.ino`.
 
 | co | pin Arduina | kde na shieldu |
 |---|---|---|
@@ -177,7 +177,7 @@ Po startu Arduino vypíše `QKD`.
 | `W` | VALID spadl na 0 a uběhlo 100 ms | detektor je v klidu, smí se poslat další qubit |
 
 **Jak se měří:** pin VALID má přerušení na náběžnou hranu (`attachInterrupt(..., RISING)`).
-V obsluze přerušení se *okamžitě* přečtou D10 a D11. `loop()` pak pošle `L..`.
+V obsluze přerušení se *okamžitě* přečtou D10 a D11. `loop()` pak pošle `L..`, ale jen když je shutter otevřený (`O`). Se zavřeným shutterem se přerušení ignoruje (šum).
 Potom `loop()` hlídá, kdy VALID spadne na 0, počká 100 ms a pošle `W`.
 
 Když `L` nebo `W` nepřijde do **15 s**, Python vypíše chybu („VALID neskočil na 1…“) a protokol se zastaví.
@@ -327,7 +327,7 @@ python pc/qkd_gui.py
    - Alice `A` + Bob `A` → detektor 1.
 5. Před vypnutím klikni na **⏻ HWP na 0 (vypnutí)** (pošle `V` Alici a `+` Bobovi), aby po zapnutí začínaly z nuly. Arduino si polohu nepamatuje, po zapnutí bere aktuální polohu jako 0.
 
-Když nesedí směr otáčení nebo počet kroků, uprav `KROKU_NA_OTACKU` (3200 = 200 kroků × 16 mikrokroků) nebo prohoď vodiče cívky.
+Když nesedí směr otáčení nebo počet kroků, uprav `KROKU_NA_OTACKU = {Alice, Bob}` (200 kroků × mikrokrokování; 1/16 = 3200, 1/32 = 6400) nebo prohoď vodiče cívky.
 
 ---
 
