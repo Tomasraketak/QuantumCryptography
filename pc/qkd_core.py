@@ -148,6 +148,7 @@ class PublicChannel:
     def __init__(self, events):
         self.events = events
         self.box = {"alice": queue.Queue(), "bob": queue.Queue()}
+        self.stopped = False
 
     def send(self, frm, to, kind, data=None, show=None):
         self.events.put(("PUB", frm, kind, data if show is None else show))
@@ -184,13 +185,19 @@ class Alice(threading.Thread):
                 self.ev.put(("PAUSE", rnd))   # počkej, až uživatel klikne „Další kolo“
                 self.go_on.wait()
                 self.go_on.clear()
+                if self.ch.stopped:
+                    return
             self.ev.put(("KEY", "alice", self.key))
             while True:                       # čekáme na obrázky k odeslání
-                self.send_image(*self.images.get())
+                job = self.images.get()
+                if job is None:
+                    return
+                self.send_image(*job)
         except SystemExit:
             pass
         except Exception as e:
-            self.ev.put(("ERROR", f"Alice: {e}"))
+            if not self.ch.stopped:
+                self.ev.put(("ERROR", f"Alice: {e}"))
 
     def one_round(self):
         bits = [random.randint(0, 1) for _ in range(N_QUBITS)]
@@ -259,7 +266,8 @@ class Bob(threading.Thread):
         except SystemExit:
             pass
         except Exception as e:
-            self.ev.put(("ERROR", f"Bob: {e}"))
+            if not self.ch.stopped:
+                self.ev.put(("ERROR", f"Bob: {e}"))
 
     def one_round(self):
         bases, results = [], []
@@ -326,6 +334,16 @@ class Session:
 
     def next_round(self):
         self.alice.go_on.set()
+
+    def stop(self):
+        """Okamžitě ukončí Alici i Boba (tlačítko vypnutí)."""
+        self.ch.stopped = True
+        for who in ("alice", "bob"):
+            self.ch.box[who].put(("STOP", None))
+        self.alice.go_on.set()
+        self.alice.images.put(None)
+        for e in ("L00", "W"):                   # ať Bob nečeká na detektor
+            self.bob_hw.events.put(e)
 
     def send_image(self, img, size, mode):
         self.alice.images.put((img, size, mode))

@@ -22,7 +22,7 @@ POL = {(0, 0): "↔ H", (0, 1): "↕ V", (1, 0): "⤢ D", (1, 1): "⤡ A"}
 HWP = {(0, 0): "45°", (0, 1): "0°", (1, 0): "-22.5°", (1, 1): "+22.5°"}
 BOB_HWP = ["+  0°", "X  +22.5°"]
 DET = {0: "detektor 0 → 0", 1: "detektor 1 → 1", None: "nic (ztráta)"}
-PREVIEW = 190
+PREVIEW = 190          # při startu se zmenší podle výšky obrazovky
 
 INTRO = ("1) Připoj Arduino (nebo zapni simulaci) a stiskni START.\n"
          "PC za Alici náhodně volí bit a bázi a natáčí její HWP, za Boba náhodně volí bázi. "
@@ -87,9 +87,11 @@ class App:
         self.explain = tk.Label(self.root, text=INTRO, font=("Segoe UI", 11), wraplength=1250,
                                 justify="left", padx=8, pady=6, bg="#fff8dc", relief="groove")
         self.explain.pack(fill="x", padx=6, pady=4)
+        self.explain.bind("<Configure>", lambda e: self.explain.config(wraplength=max(300, e.width - 20)))
 
         mid = ttk.Frame(self.root, padding=6)
         mid.pack(fill="both", expand=True)
+        self.mid = mid
 
         # --- pravý panel: výsledek + veřejný kanál
         rf = ttk.LabelFrame(mid, text="Výsledek", style="H.TLabelframe", padding=6)
@@ -114,6 +116,7 @@ class App:
         self.lbl_match.pack(anchor="w")
         ttk.Label(rf, text="Veřejný kanál (vidí i Eve):").pack(anchor="w", pady=(8, 0))
         self.pub = tk.Text(rf, width=44, height=12, font=("Consolas", 8), wrap="word")
+        self.pub.config(height=6)
         self.pub.pack(fill="both", expand=True)
 
         # --- tabulka qubitů
@@ -125,7 +128,7 @@ class App:
         heads = ("#", "Alice báze", "Alice bit", "Alice HWP", "polarizace", "Bob báze", "Bob HWP",
                  "Bob naměřil", "báze stejné?", "použití")
         widths = (32, 70, 60, 70, 70, 70, 65, 110, 85, 130)
-        self.tree = ttk.Treeview(tf, columns=cols, show="headings", height=16)
+        self.tree = ttk.Treeview(tf, columns=cols, show="headings", height=6)
         for c, h, w in zip(cols, heads, widths):
             self.tree.heading(c, text=h)
             self.tree.column(c, width=w, anchor="center")
@@ -140,7 +143,7 @@ class App:
         # --- obrázek
         imf = ttk.LabelFrame(self.root, text="Šifrovaný přenos obrázku (XOR každých 16 bitů s klíčem)",
                              style="H.TLabelframe", padding=6)
-        imf.pack(fill="x", padx=6, pady=6)
+        imf.pack(side="bottom", fill="x", padx=6, pady=6, before=self.mid)   # při malém okně se zmenší tabulka, ne tohle
         ctl = ttk.Frame(imf)
         ctl.pack(side="left", fill="y", padx=(0, 10))
         ttk.Button(ctl, text="📂 Nahrát obrázek", command=self.load_image).pack(fill="x")
@@ -242,13 +245,19 @@ class App:
 
     def park(self):
         """Obě HWP do nuly - pak lze Arduino odpojit a po zapnutí začne z nuly."""
-        if not self.devices or (self.session and not self.keys):
-            self.status.config(text="Nejde: nepřipojeno nebo právě běží tvorba klíče")
+        if not self.devices:
+            self.status.config(text="Nejde: nepřipojeno")
             return
+        if self.session:                         # přeruš běžící posílání
+            self.session.stop()
+            self.session, self.keys = None, {}
+            self.btn_next.config(state="disabled")
+            self.btn_start.config(state="normal")
         try:
+            self.devices["alice"].cmd("C")       # laser zakrýt
             self.devices["alice"].cmd("V")
             self.devices["bob"].cmd("+")
-            self.status.config(text="Obě HWP jsou na 0 – Arduino můžeš odpojit.")
+            self.status.config(text="Přerušeno – obě HWP jsou na 0, Arduino můžeš odpojit.")
         except Exception as e:
             self.status.config(text=f"Chyba: {e}")
 
@@ -442,6 +451,9 @@ class App:
 
 if __name__ == "__main__":
     root = tk.Tk()
-    root.geometry("1320x940")
+    sw, sh = root.winfo_screenwidth(), root.winfo_screenheight()
+    PREVIEW = max(110, min(190, sh // 6))
+    root.geometry(f"{min(1320, sw - 40)}x{min(940, sh - 80)}+10+10")
+    root.minsize(900, 600)
     App(root)
     root.mainloop()

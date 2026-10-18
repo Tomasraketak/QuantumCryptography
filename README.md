@@ -297,7 +297,7 @@ python pc/qkd_gui.py
 
 ## 11. Popis GUI
 
-- **Horní řádek:** port Arduina, Simulace, Eve poslouchá, Připojit, START, **⏭ Další kolo**, **⏻ HWP na 0 (vypnutí)**.
+- **Horní řádek:** port Arduina, Simulace, Eve poslouchá, Připojit, START, **⏭ Další kolo**, **⏻ HWP na 0 (vypnutí)**. Tlačítko funguje i během posílání qubitů: okamžitě ho přeruší, zavře shutter a dá obě HWP na 0.
 - **Pauza mezi koly:** když kolo nevyjde (QBER > 11 % nebo málo bitů), program se zastaví. Tabulka zůstane, takže si můžeš prohlédnout, které bity byly dobře a které špatně. Další kolo se spustí až tlačítkem **⏭ Další kolo**.
 - **Ruční ovládání:** tlačítka pro Alici (`V H D A O C ZERO1`) a Boba (`+ X ZERO2 d`). Do pole se píše `k15` (Alice) nebo `K15` (Bob) a Enter. Slouží ke kalibraci a testu.
 - **Žlutý pruh:** vysvětluje, co se právě děje.
