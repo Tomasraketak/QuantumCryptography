@@ -23,13 +23,19 @@ Alice (vysílač) a Bob (přijímač), každý Arduino Uno + CNC shield V3, prop
 3. Prvních 16 prosetých bitů = klíč, zbytek (≥ 8) se veřejně porovná → QBER. QBER > 11 % ⇒ odposlech, klíč se zahodí a kolo se opakuje automaticky (intercept-resend Eve dává teoreticky 25 %).
 4. Po `KEY:XXXX` přejdou Arduina do režimu přenosu obrázku.
 
-## Obrázek (PC)
+## GUI – vše v jednom okně (PC)
+Obě Arduina zapoj USB do jednoho PC (každé má svůj COM port).
 ```
 pip install -r pc/requirements.txt
-python pc/bob_receive_image.py COM4          # nejdřív Bob
-python pc/alice_send_image.py COM3 obr.png   # spustí QKD a pošle obrázek
+python pc/qkd_gui.py
 ```
-Alice zmenší obrázek na 32×32 RGB, XORuje každé 16bit slovo klíčem (`pc/qcrypt.py`), uloží `encrypted.png` a pošle ho přes linku. Bob dešifruje a zobrazí šifrovaný i dešifrovaný obrázek vedle sebe.
+1. Vyber port Alice a Boba → **Připojit** (Arduina se restartují, ~2,5 s). Bez hardwaru zaškrtni **Simulace** (+ volitelně **Eve poslouchá**).
+2. **START** – tabulka ukazuje qubit po qubitu, co Alice nastavila (bit, báze, úhel HWP, polarizace) a co Bob naměřil. Po siftingu se řádky obarví (klíč / test / chyba / zahozeno), ukáže se QBER na škále s prahem 11 % a klíč.
+3. **Nahrát obrázek**, zvol rozlišení a barevnou hloubku (1/8/24 bit) – GUI ukáže velikost a odhad doby přenosu. **Zašifrovat a poslat** – vidíš živě 4 obrázky: originál, zašifrovaná data u Alice, co přišlo k Bobovi a Bobovo dešifrování.
+
+Obrázek fyzicky jde PC → Alice → SoftwareSerial linka → Bob → PC. Serial Monitor nesmí být otevřený současně s GUI.
+
+Soubory: `pc/qkd_gui.py` (okno), `pc/qkd_core.py` (sériová komunikace, simulace, vyhodnocení BB84), `pc/qcrypt.py` (komprese, XOR šifrování, rámec).
 
 ## Eve
 Intercept-resend = další stanoviště Bob-setup + Alice-setup v cestě paprsku. Firmware Alice/Boba se nemění; odposlech se projeví QBER ≈ 25 %.

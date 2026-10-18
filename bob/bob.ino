@@ -149,6 +149,9 @@ void handleLink(char *msg) {
     bValid[i] = (r != 255);
     bBit[i]   = bValid[i] ? r : 0;
     link.print(F("M ")); link.println(i);
+    Serial.print(F("#B ")); Serial.print(i); Serial.print(' ');
+    Serial.print(bBase[i]); Serial.print(' ');
+    if (r == 255) Serial.println('-'); else Serial.println(r);
     char row[32];
     snprintf(row, sizeof(row), "%3d  %s   %s", i, bBase[i] ? "DA" : "HV",
              r == 255 ? "-" : (r ? "2" : "1"));

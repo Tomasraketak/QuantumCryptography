@@ -145,6 +145,8 @@ bool quantumPhase() {
     aBit[i]  = random(2);
     aBase[i] = random(2);
     setHWP(HWP_ANGLE[aBase[i]][aBit[i]]);
+    Serial.print(F("#A ")); Serial.print(i); Serial.print(' ');
+    Serial.print(aBase[i]); Serial.print(' '); Serial.println(aBit[i]);
 
     link.print(F("R ")); link.println(i);          // Alice pripravena
     if (!expect("K", LINK_TIMEOUT)) return false;  // Bob nastavil bazi
@@ -189,6 +191,7 @@ int classicalPhase() {
   if (nTest < MIN_TEST) {
     Serial.println(F("Malo bitu, opakuji kolo."));
     link.println(F("FAIL"));
+    Serial.println(F("#RESULT FEW"));
     return 0;
   }
 
@@ -210,9 +213,11 @@ int classicalPhase() {
   if (qber > QBER_LIMIT) {
     Serial.println(F("!!! QBER nad prahem - mozny odposlech (EVE). Klic zahozen."));
     link.println(F("FAIL"));
+    Serial.println(F("#RESULT FAIL"));
     return 0;
   }
 
+  Serial.println(F("#RESULT OK"));
   key = 0;
   for (int k = 0; k < KEY_BITS; k++) key = (key << 1) | aBit[sifted[k]];
   link.println(F("OK"));
@@ -222,6 +227,7 @@ int classicalPhase() {
 void runQKD() {
   for (int round = 1; ; round++) {
     Serial.print(F("===== KOLO ")); Serial.print(round); Serial.println(F(" ====="));
+    Serial.print(F("#ROUND ")); Serial.println(round);
     while (link.available()) link.read();
     if (quantumPhase() && classicalPhase() == 1) break;
     delay(1000);
