@@ -142,7 +142,7 @@ class App:
         ctl.pack(side="left", fill="y", padx=(0, 10))
         ttk.Button(ctl, text="📂 Nahrát obrázek", command=self.load_image).pack(fill="x")
         ttk.Label(ctl, text="Rozlišení (px):").pack(anchor="w", pady=(6, 0))
-        self.size = ttk.Combobox(ctl, values=[8, 16, 24, 32, 48, 64], width=6, state="readonly")
+        self.size = ttk.Combobox(ctl, values=[8, 16, 24, 32, 48, 64, 96, 128, 192, 256], width=6, state="readonly")
         self.size.set(32)
         self.size.pack(anchor="w")
         ttk.Label(ctl, text="Barevná hloubka:").pack(anchor="w", pady=(6, 0))

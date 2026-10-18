@@ -15,13 +15,10 @@ MODES = {
 def xor16(data: bytes, key: int) -> bytes:
     """XOR kazdeho 16bit slova (big-endian) s klicem. Sifrovani = desifrovani.
     Funguje i na zacatek dat (prefix) - diky tomu lze desifrovat prubezne."""
-    buf = bytearray(data)
-    hi, lo = (key >> 8) & 0xFF, key & 0xFF
-    for i in range(0, len(buf), 2):
-        buf[i] ^= hi
-        if i + 1 < len(buf):
-            buf[i + 1] ^= lo
-    return bytes(buf)
+    buf = np.frombuffer(data, np.uint8).copy()
+    buf[0::2] ^= (key >> 8) & 0xFF
+    buf[1::2] ^= key & 0xFF
+    return buf.tobytes()
 
 
 def payload_len(w: int, h: int, mode: int) -> int:

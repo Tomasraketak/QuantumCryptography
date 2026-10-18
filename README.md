@@ -221,13 +221,13 @@ Klíčové bity se nikdy nezveřejní. Zveřejněné testovací bity se do klí�
 
 ## 9. Šifrování obrázku
 
-1. Obrázek se zmenší na zvolenou velikost (8–64 px) a převede do režimu:
+1. Obrázek se zmenší na zvolenou velikost (8–256 px) a převede do režimu:
    - **1 bit** černobílý (nejméně dat),
    - **8 bit** odstíny šedi,
    - **24 bit** barevné RGB.
 2. Data se zašifrují **XOR se 16bitovým klíčem**: každý pár bajtů se XORuje s horním a dolním bajtem klíče (`pc/qcrypt.py`, `xor16`).
    Šifrování a dešifrování je stejná operace.
-3. Zašifrovaná data jdou veřejným kanálem po 32 bajtech. Bob dešifruje průběžně, takže je vidět, jak obrázek přibývá.
+3. Zašifrovaná data jdou veřejným kanálem zhruba ve 100 kouscích (aspoň 32 bajtů). Bob dešifruje průběžně, takže je vidět, jak obrázek přibývá.
 
 > Pozn.: opakovaný 16bitový klíč není bezpečná šifra. U velkých ploch stejné barvy je obrys vidět i v zašifrované verzi.
 > Pro demonstraci je to výhoda: je názorně vidět rozdíl mezi správným a špatným klíčem.
