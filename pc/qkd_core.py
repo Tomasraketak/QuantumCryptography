@@ -1,198 +1,286 @@
-"""Komunikace s Arduiny (nebo simulace) a vyhodnoceni BB84 - bez GUI.
+"""BB84 v Pythonu: Alice a Bob jako dva oddělené "počítače".
 
-Obe Arduina posilaji na USB radky; GUI zajimaji hlavne strojove radky:
-  Alice: #ROUND n | #A i baze bit | QBER:x | #RESULT OK/FAIL/FEW | KEY:XXXX
-  Bob:   #B i baze vysledek(0/1/-) | QBER:x | KEY:XXXX
-Po KEY prejdou do rezimu prenosu obrazku (Alice: USB -> linka, potvrzuje '.').
-Udalosti se davaji do fronty jako (zdroj, data): ('alice', radek),
-('bob', radek), ('bobraw', bajty), ('status', text).
+Pravidla, aby se nešvindlovalo:
+  * Alice a Bob jsou samostatné objekty, každý běží ve svém vlákně a má svá
+    soukromá data (bity, báze, klíč). Bob nemá na Alici žádný odkaz.
+  * Jediná cesta mezi nimi je PublicChannel (vše, co jím projde, je veřejné
+    a vypisuje se v GUI) + kvantový kanál = laser, který Bob změří detektory.
+  * Bob si klíč skládá jen z vlastních měření. Když kvantový kanál nefunguje,
+    Bob má jiný klíč a obrázek se mu nerozšifruje.
+
+Hardware: AliceHW / BobHW posílají příkazy Arduinům (V H D A O C M W 0 ZERO).
+Simulace: SimOptics nahrazuje obě Arduina i optiku (volitelně s Eve).
 """
+import math
 import queue
 import random
 import threading
 import time
 
+import qcrypt
+
 N_QUBITS = 64
 KEY_BITS = 16
+MIN_TEST = 8
 QBER_LIMIT = 0.11
 
-
-# --------------------------------------------------------------- vyhodnoceni
-class Round:
-    """Data jednoho kola BB84 tak, jak je GUI vidi z obou stran."""
-
-    def __init__(self, number):
-        self.number = number
-        self.alice = {}   # i -> (baze, bit)
-        self.bob = {}     # i -> (baze, vysledek nebo None)
-
-    def sift(self):
-        """Indexy, kde se baze shoduji a Bob neco zmeril."""
-        return [i for i in sorted(self.alice)
-                if i in self.bob and self.bob[i][1] is not None
-                and self.alice[i][0] == self.bob[i][0]]
-
-    def analysis(self):
-        s = self.sift()
-        key_idx, test_idx = s[:KEY_BITS], s[KEY_BITS:]
-        errors = [i for i in test_idx if self.alice[i][1] != self.bob[i][1]]
-        qber = len(errors) / len(test_idx) if test_idx else None
-        key = None
-        if len(key_idx) == KEY_BITS:
-            key = 0
-            for i in key_idx:
-                key = (key << 1) | self.alice[i][1]
-        return dict(sifted=s, key_idx=key_idx, test_idx=test_idx,
-                    errors=errors, qber=qber, key=key)
+# stav HWP pro (báze, bit); báze 0 = HV, 1 = DA; bit 0 = H/D, bit 1 = V/A
+ALICE_CMD = {(0, 0): "H", (0, 1): "V", (1, 0): "D", (1, 1): "A"}
+BOB_CMD = {0: "V", 1: "A"}        # báze HV = HWP 0°, báze DA = HWP +22.5°
 
 
-def parse_line(line):
-    """Strojovy radek -> (typ, hodnoty) nebo None."""
-    p = line.split()
-    if not p:
-        return None
-    if p[0] == "#A" and len(p) == 4:
-        return "A", (int(p[1]), int(p[2]), int(p[3]))
-    if p[0] == "#B" and len(p) == 4:
-        return "B", (int(p[1]), int(p[2]), None if p[3] == "-" else int(p[3]))
-    if p[0] == "#ROUND":
-        return "ROUND", int(p[1])
-    if p[0] == "#RESULT":
-        return "RESULT", p[1]
-    if line.startswith("QBER:"):
-        return "QBER", float(line[5:])
-    if line.startswith("KEY:"):
-        return "KEY", int(line[4:], 16)
-    return None
+# =================================================================== hardware
+class SerialDevice:
+    """Jedno Arduino na USB: pošle příkaz a počká na odpověď 'OK ...'."""
 
-
-# --------------------------------------------------------------- backendy
-class SerialBackend:
-    """Dve skutecna Arduina na dvou COM portech."""
-
-    def __init__(self, alice_port, bob_port, events):
+    def __init__(self, port, name, log):
         import serial
-        self.events = events
-        self.acks = queue.Queue()
-        self.alice = serial.Serial(alice_port, 115200, timeout=0.1)
-        self.bob = serial.Serial(bob_port, 115200, timeout=0.1)
-        self.alice_bridge = self.bob_bridge = False
-        self.running = True
-        events.put(("status", "Porty otevreny, Arduina se restartuji..."))
-        threading.Thread(target=self._read, args=("alice",), daemon=True).start()
-        threading.Thread(target=self._read, args=("bob",), daemon=True).start()
+        self.name, self.log = name, log
+        self.ser = serial.Serial(port, 115200, timeout=6)
+        self.lock = threading.Lock()
+        time.sleep(2.5)                 # Arduino se po otevření portu restartuje
+        self.ser.reset_input_buffer()
 
-    def _read(self, who):
-        ser = self.alice if who == "alice" else self.bob
-        buf = b""
-        while self.running:
-            data = ser.read(256)
-            if not data:
-                continue
-            if who == "bob" and self.bob_bridge:
-                self.events.put(("bobraw", data))
-                continue
-            if who == "alice" and self.alice_bridge:
-                for _ in range(data.count(b".")):
-                    self.acks.put(1)
-                continue
-            buf += data
-            while b"\n" in buf:
-                raw, buf = buf.split(b"\n", 1)
-                line = raw.decode(errors="replace").strip()
-                self.events.put((who, line))
-                if line.startswith("KEY:"):
-                    if who == "alice":
-                        self.alice_bridge = True
-                    else:
-                        self.bob_bridge = True
-                        if buf:
-                            self.events.put(("bobraw", buf))
-                        buf = b""
-
-    def start_qkd(self):
-        self.alice.write(b"g\n")
-
-    def send_chunk(self, chunk):
-        """Posle max 32 B pres Alici a pocka na potvrzeni."""
-        self.alice.write(chunk)
-        try:
-            self.acks.get(timeout=5)
-            return True
-        except queue.Empty:
-            return False
+    def cmd(self, c):
+        with self.lock:
+            self.ser.write((c + "\n").encode())
+            while True:
+                line = self.ser.readline().decode(errors="replace").strip()
+                if not line:
+                    raise IOError(f"{self.name}: žádná odpověď na '{c}'")
+                self.log(self.name, f"{c} -> {line}")
+                if line.startswith("OK") or line.startswith("?") or "=" in line:
+                    return line[3:] if line.startswith("OK ") else line
 
     def close(self):
-        self.running = False
-        self.alice.close()
-        self.bob.close()
+        self.ser.close()
 
 
-class SimBackend:
-    """Simulace obou Arduin (a volitelne Eve) - pro vyzkouseni bez optiky."""
+class SimOptics:
+    """Simulace obou Arduin a optiky: laser, HWP, PBS, detektory, (Eve)."""
 
-    def __init__(self, events, eve_flag, noise=0.03, loss=0.08, speed=0.12):
-        self.events = events
-        self.eve = eve_flag          # callable -> bool (zaskrtavatko v GUI)
-        self.noise, self.loss, self.speed = noise, loss, speed
-        events.put(("status", "Simulace pripravena (bez hardwaru)."))
+    def __init__(self, eve=lambda: False, noise=0.02, loss=0.05, delay=0.05):
+        self.eve, self.noise, self.loss, self.delay = eve, noise, loss, delay
+        self.alice_hwp = self.bob_hwp = 0.0
+        self.shutter_open = False
 
-    def start_qkd(self):
-        threading.Thread(target=self._run, daemon=True).start()
+    @staticmethod
+    def _measure(pol, hwp):
+        """Polarizace (V=0°, H=90°, D=-45°, A=+45°) přes HWP a PBS -> bit."""
+        out = 2 * hwp - pol
+        return 1 if random.random() < math.cos(math.radians(out)) ** 2 else 0
 
-    def _a(self, s):
-        self.events.put(("alice", s))
+    def device(self, who):
+        return _SimDevice(self, who)
 
-    def _b(self, s):
-        self.events.put(("bob", s))
 
-    def _run(self):
-        rnd = 0
-        while True:
-            rnd += 1
-            self._a(f"===== KOLO {rnd} =====")
-            self._a(f"#ROUND {rnd}")
-            r = Round(rnd)
-            for i in range(N_QUBITS):
-                ab, abit = random.randint(0, 1), random.randint(0, 1)
-                self._a(f"#A {i} {ab} {abit}")
-                r.alice[i] = (ab, abit)
-                time.sleep(self.speed)
-                # foton letici k Bobovi: (baze, bit)
-                pb, pbit = ab, abit
-                if self.eve():
-                    eb = random.randint(0, 1)
-                    ebit = pbit if eb == pb else random.randint(0, 1)
-                    pb, pbit = eb, ebit
-                bb = random.randint(0, 1)
-                if random.random() < self.loss:
-                    res = None
-                elif bb == pb:
-                    res = pbit ^ (random.random() < self.noise)
-                else:
-                    res = random.randint(0, 1)
-                r.bob[i] = (bb, res)
-                self._b(f"#B {i} {bb} {'-' if res is None else res}")
-                time.sleep(self.speed)
-            an = r.analysis()
-            if not an["test_idx"] or len(an["test_idx"]) < 8 or an["key"] is None:
-                self._a("#RESULT FEW")
-                continue
-            for out in (self._a, self._b):
-                out(f"QBER:{an['qber']:.4f}")
-            if an["qber"] > QBER_LIMIT:
-                self._a("#RESULT FAIL")
-                time.sleep(1.5)
-                continue
-            self._a("#RESULT OK")
-            self._a(f"KEY:{an['key']:04X}")
-            self._b(f"KEY:{an['key']:04X}")
-            return
+class _SimDevice:
+    ANGLE = {"V": 0, "H": 45, "D": -22.5, "A": 22.5, "0": 0}
 
-    def send_chunk(self, chunk):
-        time.sleep(len(chunk) * 10 / 9600 + 0.01)   # 9600 Bd SoftwareSerial
-        self.events.put(("bobraw", bytes(chunk)))
-        return True
+    def __init__(self, optics, who):
+        self.o, self.who = optics, who
+
+    def cmd(self, c):
+        o = self.o
+        time.sleep(o.delay)
+        if c in self.ANGLE:
+            setattr(o, f"{self.who}_hwp", self.ANGLE[c])
+        elif c == "O":
+            o.shutter_open = True
+        elif c == "C":
+            o.shutter_open = False
+        elif c == "M":
+            if not o.shutter_open or random.random() < o.loss:
+                return "-"
+            pol = 2 * o.alice_hwp                  # polarizace za HWP Alice
+            if o.eve():                            # Eve: změří a pošle znovu
+                eb = random.randint(0, 1)
+                ebit = o._measure(pol, [0, 22.5][eb])
+                pol = {(0, 0): 90, (0, 1): 0, (1, 0): -45, (1, 1): 45}[(eb, ebit)]
+            bit = o._measure(pol, o.bob_hwp)
+            return str(bit ^ (random.random() < o.noise))
+        return ""
 
     def close(self):
         pass
+
+
+# =================================================================== veřejný kanál
+class PublicChannel:
+    """Klasický veřejný kanál. Všechno, co jím jde, vidí i Eve (a GUI)."""
+
+    def __init__(self, events):
+        self.events = events
+        self.box = {"alice": queue.Queue(), "bob": queue.Queue()}
+
+    def send(self, frm, to, kind, data=None, show=None):
+        self.events.put(("PUB", frm, kind, data if show is None else show))
+        self.box[to].put((kind, data))
+
+    def recv(self, who, kind):
+        k, data = self.box[who].get(timeout=60)
+        if k == "STOP":
+            raise SystemExit
+        if k != kind:
+            raise RuntimeError(f"{who}: čekal jsem {kind}, přišlo {k}")
+        return data
+
+
+def bits_str(bits):
+    return "".join(str(b) for b in bits)
+
+
+# =================================================================== Alice
+class Alice(threading.Thread):
+    def __init__(self, hw, ch, events):
+        super().__init__(daemon=True)
+        self.hw, self.ch, self.ev = hw, ch, events
+        self.key = None              # soukromé!
+        self.images = queue.Queue()
+
+    def run(self):
+        try:
+            for rnd in range(1, 1000):
+                self.ev.put(("ROUND", rnd))
+                if self.one_round():
+                    break
+                time.sleep(1)
+            self.ev.put(("KEY", "alice", self.key))
+            while True:                       # čekáme na obrázky k odeslání
+                self.send_image(*self.images.get())
+        except SystemExit:
+            pass
+        except Exception as e:
+            self.ev.put(("ERROR", f"Alice: {e}"))
+
+    def one_round(self):
+        bits = [random.randint(0, 1) for _ in range(N_QUBITS)]
+        bases = [random.randint(0, 1) for _ in range(N_QUBITS)]
+        # --- kvantová fáze
+        for i in range(N_QUBITS):
+            self.hw.cmd(ALICE_CMD[(bases[i], bits[i])])
+            self.ev.put(("A", i, bases[i], bits[i]))
+            self.ch.send("alice", "bob", "READY", i)
+            self.ch.recv("alice", "BOB_READY")
+            self.hw.cmd("O")                         # laser svítí
+            self.ch.send("alice", "bob", "OPEN", i)
+            self.ch.recv("alice", "MEASURED")
+            self.hw.cmd("C")                         # laser zakrytý
+            self.ch.send("alice", "bob", "CLOSED", i)
+            self.ch.recv("alice", "DARK")
+        self.hw.cmd("0")                             # HWP do nuly
+        # --- sifting
+        bob_bases, bob_valid = self.ch.recv("alice", "BOB_BASES")
+        self.ch.send("alice", "bob", "ALICE_BASES", bases, bits_str(bases))
+        sifted = [bits[i] for i in range(N_QUBITS) if bob_valid[i] and bases[i] == bob_bases[i]]
+        test = sifted[KEY_BITS:]
+        if len(test) < MIN_TEST:
+            self.ch.send("alice", "bob", "VERDICT", "FEW")
+            self.ev.put(("RESULT", "FEW", None))
+            return False
+        self.ch.send("alice", "bob", "TEST_BITS", test, bits_str(test))
+        errors = self.ch.recv("alice", "ERRORS")
+        qber = errors / len(test)
+        verdict = "OK" if qber <= QBER_LIMIT else "FAIL"
+        self.ch.send("alice", "bob", "VERDICT", verdict)
+        self.ev.put(("RESULT", verdict, qber))
+        if verdict == "OK":
+            self.key = int(bits_str(sifted[:KEY_BITS]), 2)
+        return verdict == "OK"
+
+    def send_image(self, img, size, mode):
+        data, preview = qcrypt.encode_image(img, size, mode)
+        enc = qcrypt.xor16(data, self.key)           # šifruje SVÝM klíčem
+        self.ev.put(("ALICE_IMG", preview, enc, size, mode))
+        self.ch.send("alice", "bob", "IMG_HEADER", (size, mode), f"{size}x{size}, režim {mode}")
+        for i in range(0, len(enc), 32):
+            chunk = enc[i:i + 32]
+            self.ch.send("alice", "bob", "IMG_DATA", chunk, chunk.hex(" "))
+            self.ev.put(("ALICE_SENT", i + len(chunk)))
+            time.sleep(0.03)
+        self.ch.send("alice", "bob", "IMG_END")
+
+
+# =================================================================== Bob
+class Bob(threading.Thread):
+    def __init__(self, hw, ch, events):
+        super().__init__(daemon=True)
+        self.hw, self.ch, self.ev = hw, ch, events
+        self.key = None              # soukromé!
+
+    def run(self):
+        try:
+            while self.key is None:
+                self.one_round()
+            self.ev.put(("KEY", "bob", self.key))
+            while True:
+                self.receive_image()
+        except SystemExit:
+            pass
+        except Exception as e:
+            self.ev.put(("ERROR", f"Bob: {e}"))
+
+    def one_round(self):
+        bases, results = [], []
+        for i in range(N_QUBITS):
+            self.ch.recv("bob", "READY")
+            b = random.randint(0, 1)
+            self.hw.cmd(BOB_CMD[b])
+            bases.append(b)
+            self.ch.send("bob", "alice", "BOB_READY", i)
+            self.ch.recv("bob", "OPEN")
+            r = self.hw.cmd("M")                     # čeká na VALID, čte detektory
+            res = None if r.strip() == "-" else int(r)
+            results.append(res)
+            self.ev.put(("B", i, b, res))
+            self.ch.send("bob", "alice", "MEASURED", i)
+            self.ch.recv("bob", "CLOSED")
+            self.hw.cmd("W")                         # VALID = 0 + 100 ms
+            self.ch.send("bob", "alice", "DARK", i)
+        self.hw.cmd("0")
+        valid = [r is not None for r in results]
+        self.ch.send("bob", "alice", "BOB_BASES", (bases, valid),
+                     f"báze {bits_str(bases)}\nzachyceno {bits_str(int(v) for v in valid)}")
+        alice_bases = self.ch.recv("bob", "ALICE_BASES")
+        sifted = [results[i] for i in range(N_QUBITS) if valid[i] and bases[i] == alice_bases[i]]
+        kind, data = self.ch.box["bob"].get(timeout=60)
+        if kind == "VERDICT":                        # FEW - málo bitů
+            return
+        test = data                                  # TEST_BITS
+        errors = sum(a != b for a, b in zip(test, sifted[KEY_BITS:]))
+        self.ch.send("bob", "alice", "ERRORS", errors)
+        self.ev.put(("BOB_QBER", errors / len(test) if test else 0))
+        if self.ch.recv("bob", "VERDICT") == "OK":
+            self.key = int(bits_str(sifted[:KEY_BITS]), 2)
+
+    def receive_image(self):
+        size, mode = self.ch.recv("bob", "IMG_HEADER")
+        enc = b""
+        while True:
+            kind, data = self.ch.box["bob"].get()
+            if kind == "IMG_END":
+                break
+            enc += data
+            dec = qcrypt.xor16(enc, self.key)        # dešifruje SVÝM klíčem
+            self.ev.put(("BOB_IMG", enc, dec, size, mode))
+        self.ev.put(("BOB_IMG_DONE",))
+
+
+# =================================================================== celé
+class Session:
+    """Spojí hardware (nebo simulaci), kanál, Alici a Boba."""
+
+    def __init__(self, events, alice_hw, bob_hw):
+        self.events = events
+        self.alice_hw, self.bob_hw = alice_hw, bob_hw
+        self.ch = PublicChannel(events)
+        self.alice = self.bob = None
+
+    def start(self):
+        self.alice = Alice(self.alice_hw, self.ch, self.events)
+        self.bob = Bob(self.bob_hw, self.ch, self.events)
+        self.bob.start()
+        self.alice.start()
+
+    def send_image(self, img, size, mode):
+        self.alice.images.put((img, size, mode))
