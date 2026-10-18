@@ -8,7 +8,7 @@ Pravidla, aby se nešvindlovalo:
   * Bob si klíč skládá jen z vlastních měření. Když kvantový kanál nefunguje,
     Bob má jiný klíč a obrázek se mu nerozšifruje.
 
-Hardware: AliceHW / BobHW posílají příkazy Arduinům (V H D A O C M W 0 ZERO).
+Hardware: AliceHW / BobHW posílají příkazy Arduinům (V H D A O C M W ZERO k).
 Simulace: SimOptics nahrazuje obě Arduina i optiku (volitelně s Eve).
 """
 import math
@@ -75,7 +75,7 @@ class SimOptics:
 
 
 class _SimDevice:
-    ANGLE = {"V": 0, "H": 45, "D": -22.5, "A": 22.5, "0": 0}
+    ANGLE = {"V": 0, "H": 45, "D": -22.5, "A": 22.5}
 
     def __init__(self, optics, who):
         self.o, self.who = optics, who
@@ -168,7 +168,7 @@ class Alice(threading.Thread):
             self.hw.cmd("C")                         # laser zakrytý
             self.ch.send("alice", "bob", "CLOSED", i)
             self.ch.recv("alice", "DARK")
-        self.hw.cmd("0")                             # HWP do nuly
+        self.hw.cmd("V")                             # HWP do nuly (V)
         # --- sifting
         bob_bases, bob_valid = self.ch.recv("alice", "BOB_BASES")
         self.ch.send("alice", "bob", "ALICE_BASES", bases, bits_str(bases))
@@ -237,7 +237,7 @@ class Bob(threading.Thread):
             self.ch.recv("bob", "CLOSED")
             self.hw.cmd("W")                         # VALID = 0 + 100 ms
             self.ch.send("bob", "alice", "DARK", i)
-        self.hw.cmd("0")
+        self.hw.cmd("V")                             # HWP do nuly
         valid = [r is not None for r in results]
         self.ch.send("bob", "alice", "BOB_BASES", (bases, valid),
                      f"báze {bits_str(bases)}\nzachyceno {bits_str(int(v) for v in valid)}")

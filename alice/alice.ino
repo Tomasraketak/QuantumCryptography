@@ -9,17 +9,16 @@
 //    V H D A   natoč HWP na stav           OK
 //              (V = 0°, H = 45°, D = -22.5°, A = +22.5°)
 //    O / C     shutter otevřít / zavřít    OK
-//    0         HWP do nuly (V)             OK
-//    ZERO      aktuální poloha = nula      OK
-//    a <st>    HWP na úhel (kalibrace)     OK <poloha>
-//    j <kroky> posun o kroky (kalibrace)   OK <poloha>
+//    ZERO      aktuální natočení = 0 (= poloha V)   OK
+//    k<st>     pootoč HWP o <st> stupňů vůči
+//              současné poloze, např. k15, k-2.5 (kalibrace)   OK <poloha>
 // =====================================================================
 #include <Servo.h>
 
 #define STEP_PIN  2    // krokac X - krok
 #define DIR_PIN   5    // krokac X - smer
 #define EN_PIN    8    // LOW = driver zapnuty
-#define SERVO_PIN 9    // servo shutteru
+#define SERVO_PIN 3    // servo shutteru (D3 = Y.STEP, Y slot bez driveru)
 
 const long KROKU_NA_OTACKU = 3200;   // 200 kroku * 16 mikrokroku
 const int  SERVO_OTEVRENO  = 90;
@@ -60,12 +59,10 @@ void loop() {
   else if (p == "H") natocHWP(45);
   else if (p == "D") natocHWP(-22.5);
   else if (p == "A") natocHWP(22.5);
-  else if (p == "0") natocHWP(0);
   else if (p == "O") { shutter.write(SERVO_OTEVRENO); delay(250); }  // pockej na servo
   else if (p == "C") { shutter.write(SERVO_ZAVRENO);  delay(250); }
   else if (p == "ZERO") poloha = 0;
-  else if (p.startsWith("a ")) natocHWP(p.substring(2).toFloat());
-  else if (p.startsWith("j ")) krokuj(p.substring(2).toInt());
+  else if (p.startsWith("k")) krokuj(lround(p.substring(1).toFloat() * KROKU_NA_OTACKU / 360));
   else { Serial.println("? " + p); return; }
 
   Serial.print("OK ");

@@ -75,14 +75,14 @@ class App:
         # ruční ovládání / kalibrace
         man = ttk.Frame(self.root, padding=(6, 0))
         man.pack(fill="x")
-        for who, cmds in (("alice", "V H D A O C 0 ZERO"), ("bob", "V H D A M 0 ZERO d")):
+        for who, cmds in (("alice", "V H D A O C ZERO"), ("bob", "V H D A M ZERO d")):
             ttk.Label(man, text=f"Ručně {who.capitalize()}:").pack(side="left", padx=(8, 2))
             for c in cmds.split():
                 ttk.Button(man, text=c, width=6, command=lambda w=who, c=c: self.manual(w, c)).pack(side="left")
             e = ttk.Entry(man, width=8)
             e.pack(side="left", padx=2)
             e.bind("<Return>", lambda ev, w=who, e=e: self.manual(w, e.get()))
-        ttk.Label(man, text="(pole: např. 'a 22.5' nebo 'j -10' + Enter)").pack(side="left", padx=6)
+        ttk.Label(man, text="(pole: např. 'k15' = pootoč o 15°, 'k-2.5' + Enter)").pack(side="left", padx=6)
 
         self.explain = tk.Label(self.root, text=INTRO, font=("Segoe UI", 11), wraplength=1250,
                                 justify="left", padx=8, pady=6, bg="#fff8dc", relief="groove")

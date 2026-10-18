@@ -123,13 +123,13 @@ Obě Arduina: **Arduino Uno + CNC shield V3**. Krokový motor je na ose **X** (d
 | | Alice | Bob |
 |---|---|---|
 | Krokáč HWP | STEP D2, DIR D5, EN D8 (LOW = zapnuto) | STEP D2, DIR D5, EN D8 |
-| Servo shutteru | D9 (na shieldu pin X limit/endstop) | – |
+| Servo shutteru | **D3** (na shieldu Y.STEP, Y slot bez driveru) | – |
 | Detektor 0 (bit 0, H/D) | – | **D7** |
 | Detektor 1 (bit 1, V/A) | – | **D6** |
 | VALID (měření platné) | – | **D3** – přerušení |
 
 Poznámky:
-- **D3 je na CNC shieldu Y.STEP.** V Y slotu proto **nesmí být driver**. Přerušení umí na Uno jen D2 a D3, a D2 už používá osa X.
+- **D3 je na CNC shieldu Y.STEP** (u Alice servo, u Boba VALID). V Y slotu proto **nesmí být driver**. Přerušení umí na Uno jen D2 a D3, a D2 už používá osa X.
 - Servo napájej raději z externích 5 V se společnou zemí. Proud serva umí resetovat Arduino.
 - Shutter: `SERVO_OTEVRENO = 90°`, `SERVO_ZAVRENO = 110°` (o 20° dál). Uprav konstanty v `alice/alice.ino` podle mechaniky.
 - Detektory musí dávat logické úrovně 0/5 V. VALID jde do HIGH, až jsou výstupy detektorů platné.
@@ -148,10 +148,8 @@ Po startu Arduino vypíše `ALICE` nebo `BOB`.
 | `O` / `C` | otevři / zavři shutter (+250 ms na servo) | – | `OK …` |
 | `M` | – | čeká na VALID↑ (max 2 s) a přečte detektory | `OK 0`, `OK 1`, nebo `OK -` (nic / oba / timeout) |
 | `W` | – | čeká, až VALID = 0, pak ještě 100 ms | `OK` |
-| `0` | HWP do nuly (vertikála), třeba před vypnutím | stejné | `OK 0` |
-| `ZERO` | aktuální poloha se prohlásí za nulu | stejné | `OK 0` |
-| `a <stupně>` | natoč HWP na úhel, např. `a 22.5` | stejné | `OK <poloha>` |
-| `j <kroky>` | posuň o kroky, např. `j -10` | stejné | `OK <poloha>` |
+| `ZERO` | aktuální natočení HWP se uloží jako 0 = poloha **V**; od ní se počítají H, D, A | stejné | `OK 0` |
+| `k<stupně>` | pootoč HWP o zadaný úhel vůči současné poloze, např. `k15`, `k-2.5` | stejné | `OK <poloha v krocích>` |
 | `d` | – | výpis `det0=… det1=… valid=…` | text |
 | jiné | – | – | `? <příkaz>` |
 
@@ -174,7 +172,7 @@ Alice:     [C] shutter zavřít ─ "CLOSED" ─►
 Bob:       [W] čekej VALID↓ + 100 ms ─ "DARK" ─►   … další qubit
 ```
 
-Za jedno kolo projde 64 qubitů, pak obě strany pošlou `0` (HWP do nuly).
+Za jedno kolo projde 64 qubitů, pak obě strany pošlou `V` (HWP do nuly).
 Synchronizační zprávy jdou také veřejným kanálem. Nic tajného neobsahují, jen pořadové číslo qubitu, a GUI je kvůli přehlednosti skrývá.
 
 ---
@@ -232,7 +230,7 @@ python pc/qkd_gui.py
 ## 11. Popis GUI
 
 - **Horní řádek:** porty, Simulace, Eve poslouchá, Připojit, START.
-- **Ruční ovládání:** tlačítka pro Alici (`V H D A O C 0 ZERO`) a Boba (`V H D A M 0 ZERO d`) a pole pro `a …` / `j …` (Enter). Slouží ke kalibraci a testu.
+- **Ruční ovládání:** tlačítka pro Alici (`V H D A O C ZERO`) a Boba (`V H D A M ZERO d`) a pole pro `k…`, např. `k15` (Enter). Slouží ke kalibraci a testu.
 - **Žlutý pruh:** vysvětluje, co se právě děje.
 - **Tabulka qubitů:** číslo, Alicina báze/bit/úhel HWP/polarizace, Bobova báze/úhel HWP/naměřená hodnota, shoda bází a použití bitu. Barvy:
   - 🟩 zelená = klíč,
@@ -253,13 +251,13 @@ python pc/qkd_gui.py
 ## 12. Kalibrace
 
 1. Zapni laser a otevři shutter (ručně `O`).
-2. Bob: ručně `V`, Alice: posouvej HWP příkazy `j 5` / `j -5`, dokud detektor 1 nesvítí nejsilněji (`d` ukáže stav). Pak dej Alici **`ZERO`**.
+2. Bob: ručně `V`, Alice: pootáčej HWP příkazy `k2` / `k-2` (jemněji `k0.5`), dokud detektor 1 nesvítí nejsilněji (`d` ukáže stav). Pak dej Alici **`ZERO`**.
 3. Stejně nastav Bobovu HWP, aby pro Alicino `V` svítil čistě detektor 1. Pak dej Bobovi **`ZERO`**.
 4. Ověř:
    - Alice `H` → detektor 0;
    - Alice `D` + Bob `A` → detektor 0;
    - Alice `A` + Bob `A` → detektor 1.
-5. Před vypnutím pošli oběma **`0`**, aby po zapnutí začínaly z nuly. Arduino si polohu nepamatuje, po zapnutí bere aktuální polohu jako 0.
+5. Před vypnutím pošli oběma **`V`**, aby po zapnutí začínaly z nuly. Arduino si polohu nepamatuje, po zapnutí bere aktuální polohu jako 0.
 
 Když nesedí směr otáčení nebo počet kroků, uprav `KROKU_NA_OTACKU` (3200 = 200 kroků × 16 mikrokroků) nebo prohoď vodiče cívky.
 

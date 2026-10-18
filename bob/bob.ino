@@ -10,10 +10,9 @@
 //    M         změř: čeká na VALID (přerušení), přečte detektory
 //                                          OK 0 / OK 1 / OK - (nic)
 //    W         počkej, až VALID = 0, pak 100 ms   OK
-//    0         HWP do nuly                 OK
-//    ZERO      aktuální poloha = nula      OK
-//    a <st>    HWP na úhel (kalibrace)     OK <poloha>
-//    j <kroky> posun o kroky (kalibrace)   OK <poloha>
+//    ZERO      aktuální natočení = 0 (= poloha V)   OK
+//    k<st>     pootoč HWP o <st> stupňů vůči
+//              současné poloze, např. k15, k-2.5 (kalibrace)   OK <poloha>
 //    d         stav pinů                   det0=.. det1=.. valid=..
 // =====================================================================
 #define STEP_PIN  2    // krokac X - krok
@@ -95,10 +94,8 @@ void loop() {
   else if (p == "H") natocHWP(45);
   else if (p == "D") natocHWP(-22.5);
   else if (p == "A") natocHWP(22.5);
-  else if (p == "0") natocHWP(0);
   else if (p == "ZERO") poloha = 0;
-  else if (p.startsWith("a ")) natocHWP(p.substring(2).toFloat());
-  else if (p.startsWith("j ")) krokuj(p.substring(2).toInt());
+  else if (p.startsWith("k")) krokuj(lround(p.substring(1).toFloat() * KROKU_NA_OTACKU / 360));
   else { Serial.println("? " + p); return; }
 
   zmereno = false;      // po natoceni zahodime stary zablesk
