@@ -35,8 +35,8 @@ const byte DIR_PIN[2]  = {7, 5};
 long poloha[2] = {0, 0};             // poloha HWP v krocich (0 = V)
 
 const long KROKU_NA_OTACKU = 3200;   // 200 kroku * 16 mikrokroku
-const int  SERVO_OTEVRENO  = 90;
-const int  SERVO_ZAVRENO   = 110;    // o 20° dal = laser zakryty
+const int  SERVO_OTEVRENO  = 0;
+const int  SERVO_ZAVRENO   = 90;     // o 90° dal = laser zakryty
 
 Servo shutter;
 
@@ -107,8 +107,8 @@ void loop() {
     Serial.print(" valid="); Serial.println(digitalRead(VALID_PIN));
     return;
   }
-  if (p == "O") { shutter.write(SERVO_OTEVRENO); delay(250); Serial.println("OK"); return; }
-  if (p == "C") { shutter.write(SERVO_ZAVRENO);  delay(250); Serial.println("OK"); return; }
+  if (p == "O") { shutter.write(SERVO_OTEVRENO); delay(500); Serial.println("OK"); return; }
+  if (p == "C") { shutter.write(SERVO_ZAVRENO);  delay(500); Serial.println("OK"); return; }
 
   byte m;                                       // ktery motor
   if      (p == "V") { m = 0; natocHWP(0, 0); }

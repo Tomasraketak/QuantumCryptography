@@ -139,7 +139,7 @@ V jednom programu by bylo snadné „omylem“ dát Bobovi Alicin klíč. Kód t
 Poznámky:
 - Přerušení umí na Uno jen D2 a D3. D2 zabírá Bobův motor, proto VALID jde na D3. Ve slotu Y proto **nesmí být driver**.
 - Servo napájej raději z externích 5 V se společnou zemí. Proud serva umí resetovat Arduino.
-- Shutter: `SERVO_OTEVRENO = 90°`, `SERVO_ZAVRENO = 110°` (o 20° dál). Uprav konstanty v `qkd/qkd.ino` podle mechaniky.
+- Shutter: `SERVO_OTEVRENO = 0°`, `SERVO_ZAVRENO = 90°`. Uprav konstanty v `qkd/qkd.ino` podle mechaniky.
 - Detektory musí dávat logické úrovně 0/5 V. VALID jde do HIGH, až jsou výstupy detektorů platné.
 
 ---
@@ -155,7 +155,7 @@ Po startu Arduino vypíše `QKD`.
 | příkaz | co dělá | odpověď |
 |---|---|---|
 | `V` `H` `D` `A` | HWP Alice na 0° / 45° / −22,5° / +22,5° | `OK <poloha v krocích>` |
-| `O` / `C` | otevři / zavři shutter (+250 ms na servo) | `OK` |
+| `O` / `C` | otevři / zavři shutter (+500 ms na servo) | `OK` |
 | `ZERO1` | aktuální natočení HWP Alice se uloží jako 0 = poloha **V** | `OK 0` |
 | `k<stupně>` | pootoč HWP Alice o úhel od současné polohy, např. `k15`, `k-2.5` | `OK <poloha>` |
 
