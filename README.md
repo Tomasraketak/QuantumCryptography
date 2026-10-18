@@ -15,7 +15,7 @@ Nakonec Alice klíčem zašifruje malý obrázek. Bob ho svým klíčem dešifru
 5. [Hardware a zapojení](#5-hardware-a-zapojení)
 6. [Firmware a příkazy Arduina](#6-firmware-a-příkazy-arduina)
 7. [Průběh jednoho qubitu (časování)](#7-průběh-jednoho-qubitu-časování)
-8. [Sifting, QBER a klíč](#8-sifting-qber-a-klíč)
+8. [Sifting, klíč a pravděpodobnost Eve](#8-sifting-klíč-a-pravděpodobnost-eve)
 9. [Šifrování obrázku](#9-šifrování-obrázku)
 10. [Instalace a spuštění GUI](#10-instalace-a-spuštění-gui)
 11. [Popis GUI](#11-popis-gui)
@@ -218,20 +218,39 @@ Synchronizační zprávy jdou také veřejným kanálem. Nic tajného neobsahuj�
 
 ---
 
-## 8. Sifting, QBER a klíč
+## 8. Sifting, klíč a pravděpodobnost Eve
 
-Po 64 qubitech:
-1. **Bob → veřejně:** svých 64 bází a které qubity zachytil (ztracené = `-`).
-2. **Alice → veřejně:** svých 64 bází.
-3. Oba si **každý sám** vyberou qubity, kde je platné měření a stejná báze (v průměru ~30).
-4. Prvních **16** prosátých bitů je **klíč**. Zbytek (min. 8) jsou **testovací bity**.
-   Při méně než 8 testovacích bitech se kolo opakuje.
-5. **Alice → veřejně:** testovací bity. **Bob** je porovná se svými a pošle **počet chyb**.
-6. QBER = chyby / testovací bity.
-   - **≤ 11 %** → verdikt OK, klíč se použije.
-   - **> 11 %** → FAIL (pravděpodobně Eve), nové kolo.
+V GUI nastavíš:
+- **Qubitů:** kolik qubitů se pošle (8–512, třeba 32 nebo 100);
+- **Doposlat po:** kolik dalších qubitů se pošle, když po siftingu chybí bity do klíče. Doposílá se, dokud není aspoň 16 prosátých bitů. Hodnota **0** znamená nedoposílat a kolo zopakovat.
 
-Klíčové bity se nikdy nezveřejní. Zveřejněné testovací bity se do klíče nepoužijí.
+Postup:
+1. Alice veřejně ohlásí dávku (`BATCH 40`) a pošle ji.
+2. **Bob → veřejně:** báze a které qubity zachytil. **Alice → veřejně:** své báze.
+3. Každý si **sám** nechá qubity se stejnou bází a platným měřením (v průměru polovinu).
+4. Je-li prosátých bitů méně než 16, pošle se další dávka (viz výše).
+5. **Prvních 16 prosátých bitů = klíč.** Všechno navíc jsou **testovací bity**, i kdyby to byl jen jeden. Veřejně se porovnají a GUI je vypíše (Alice vs Bob).
+6. Z počtu chyb se spočítá **pravděpodobnost, že poslouchá Eve** (Bayes, na začátku 50 : 50):
+
+```
+L_eve = 0,25^e · 0,75^(n−e)      Eve (změř a pošli znovu) dělá 25 % chyb
+L_šum = 0,03^e · 0,97^(n−e)      optika bez Eve ~3 % chyb
+P(Eve) = L_eve / (L_eve + L_šum)       n = testovacích bitů, e = chyb
+```
+
+| testovací bity | chyb | P(Eve) |
+|---|---|---|
+| 1 | 0 | 44 % – skoro nic nevíme |
+| 4 | 0 | 26 % |
+| 16 | 0 | 1,6 % |
+| 16 | 4 | 99,5 % |
+
+- **P(Eve) > 50 %** → FAIL, klíč se zahodí, program se zastaví a čeká na **⏭ Další kolo**.
+- Jinak se klíč použije. Bez testovacích bitů (prosátých přesně 16) je P(Eve) = 50 % a odposlech nejde ověřit.
+
+**Čím víc qubitů pošleš, tím víc testovacích bitů zbude a tím jistěji víš, jestli Eve poslouchá.**
+Při malém počtu testů může Eve proklouznout náhodou. Pak se klíče Alice a Boba liší (GUI ukáže ✘) a obrázek se Bobovi nerozšifruje.
+QBER a hranice 11 % se dál ukazují pro orientaci. Konstanty `NOISE` a `EVE_ERR` jsou v `pc/qkd_core.py`.
 
 ---
 

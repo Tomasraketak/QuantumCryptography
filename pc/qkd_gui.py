@@ -15,7 +15,7 @@ import numpy as np
 from PIL import Image, ImageTk
 
 import qcrypt
-from qkd_core import (KEY_BITS, N_QUBITS, QBER_LIMIT, SerialDevice, Session, SimOptics)
+from qkd_core import (KEY_BITS, QBER_LIMIT, SerialDevice, Session, SimOptics)
 
 BASIS = ["HV (+)", "DA (×)"]
 POL = {(0, 0): "↔ H", (0, 1): "↕ V", (1, 0): "⤢ D", (1, 1): "⤡ A"}
@@ -64,6 +64,14 @@ class App:
         ttk.Checkbutton(top, text="Eve poslouchá (simulace)", variable=self.eve).pack(side="left")
         self.btn_conn = ttk.Button(top, text="Připojit", command=self.connect)
         self.btn_conn.pack(side="left", padx=6)
+        ttk.Label(top, text="Qubitů:").pack(side="left")
+        self.nq = ttk.Spinbox(top, from_=8, to=512, increment=8, width=5)
+        self.nq.set(64)
+        self.nq.pack(side="left")
+        ttk.Label(top, text="Doposlat po:").pack(side="left", padx=(6, 0))
+        self.nextra = ttk.Spinbox(top, from_=0, to=256, increment=8, width=5)
+        self.nextra.set(16)
+        self.nextra.pack(side="left", padx=(0, 6))
         self.btn_start = ttk.Button(top, text="▶ START – vytvořit klíč", command=self.start, state="disabled")
         self.btn_start.pack(side="left")
         self.btn_next = ttk.Button(top, text="⏭ Další kolo", command=self.next_round, state="disabled")
@@ -105,6 +113,8 @@ class App:
         self.qber_cv.pack()
         self.lbl_qber = ttk.Label(rf, text="–", wraplength=300)
         self.lbl_qber.pack(anchor="w")
+        self.lbl_eve = ttk.Label(rf, text="", wraplength=300, style="Big.TLabel")
+        self.lbl_eve.pack(anchor="w")
         self._draw_qber(None)
         ttk.Label(rf, text="Klíč Alice (zná jen Alice):").pack(anchor="w", pady=(8, 0))
         self.lbl_akey = ttk.Label(rf, text="– – – –", style="Key.TLabel")
@@ -263,8 +273,13 @@ class App:
 
     def start(self):
         self.btn_start.config(state="disabled")
+        try:
+            n, extra = int(self.nq.get()), int(self.nextra.get())
+        except ValueError:
+            n, extra = 64, 16
         self.session = Session(self.events, self.devices["alice"], self.devices["bob"])
-        self.session.start()
+        self.session.start(n, extra)
+        self.round_info = (n, extra)
 
     # ------------------------------------------------------------ události
     def _poll(self):
@@ -305,8 +320,11 @@ class App:
 
     def on_ROUND(self, n):
         self.rows = {}
+        self.round_info = getattr(self, 'round_info', (64, 16))
         self.tree.delete(*self.tree.get_children())
-        self.lbl_round.config(text=f"Kolo: {n}   ({N_QUBITS} qubitů)")
+        q, extra = self.round_info
+        self.lbl_round.config(text=f"Kolo: {n}   ({q} qubitů" + (f", chybí-li → +{extra})" if extra else ")"))
+        self.lbl_eve.config(text="")
         self.lbl_sift.config(text="Prosáté bity: –")
         self._draw_qber(None)
         self.lbl_qber.config(text="–", foreground="black")
@@ -339,7 +357,7 @@ class App:
         self.say(f"Qubit {i}: Bob (báze {BASIS[base]}) {txt} Shutter se zavře a čeká se, "
                  f"až detektor zhasne (+100 ms).")
 
-    def on_RESULT(self, verdict, qber):
+    def on_RESULT(self, verdict, qber, p_eve, test, errors):
         sifted = [i for i in sorted(self.rows) if "b" in self.rows[i] and self.rows[i]["b"][1] is not None
                   and self.rows[i]["a"][0] == self.rows[i]["b"][0]]
         key_idx, test_idx = sifted[:KEY_BITS], sifted[KEY_BITS:]
@@ -358,21 +376,35 @@ class App:
                 tag, role = "drop", "jiná báze → zahodit"
             vals[9] = role
             self.tree.item(str(i), tags=(tag,), values=vals)
-        self.lbl_sift.config(text=f"Prosáté bity: {len(sifted)}/{N_QUBITS}\n"
+        self.lbl_sift.config(text=f"Prosáté bity: {len(sifted)}/{len(self.rows)} odeslaných\n"
                                   f"  klíč: {len(key_idx)}, test: {len(test_idx)}")
         if verdict == "FEW":
-            self.say("Málo qubitů se shodnou bází – kolo se opakuje.")
+            self.say(f"Jen {len(sifted)} qubitů se shodnou bází – na 16bitový klíč to nestačí "
+                     "a doposílání je vypnuté (0). Kolo se opakuje.")
             return
         self._draw_qber(qber)
+        if not test:
+            self.lbl_qber.config(text="Žádné testovací bity (prosátých přesně 16) – odposlech NELZE ověřit.",
+                                 foreground="orange")
+            self.lbl_eve.config(text="P(Eve) = 50 % (nevíme nic). Pošli víc qubitů.", foreground="orange")
+            self.say("Všech 16 prosátých bitů padlo na klíč, na test nezbylo nic. Klíč se použije, "
+                     "ale nevíme, jestli neposlouchala Eve.")
+            return
+        bob = "".join(str(self.rows[i]["b"][1]) for i in test_idx)
+        self.lbl_eve.config(
+            text=f"Test: A {''.join(map(str, test))}\n      B {bob}\n→ {errors} chyb z {len(test)}\n"
+                 f"Pravděpodobnost, že poslouchá Eve: {p_eve * 100:.1f} %",
+            foreground="red" if verdict == "FAIL" else "green")
         txt = f"QBER = {qber * 100:.1f} %"
         if verdict == "FAIL":
-            self.lbl_qber.config(text=txt + "\n⚠ NAD PRAHEM 11 % → pravděpodobně odposlech (Eve)! "
-                                            "Klíč se zahazuje, zkouší se znovu.", foreground="red")
+            self.lbl_qber.config(text=txt + "\n⚠ Eve je pravděpodobnější než šum → klíč se zahazuje.",
+                                 foreground="red")
             self.say("Sifting: Alice a Bob si VEŘEJNĚ řekli báze (ne bity!) a nechali jen qubity se shodnou "
                      "bází. Část z nich veřejně porovnali – chyb je moc. Eve, která měří a posílá znovu, se ve "
                      "50 % trefí do špatné báze → ~25 % chyb. Klíč NENÍ bezpečný.")
         else:
-            self.lbl_qber.config(text=txt + "\n✔ pod prahem 11 % → nikdo neposlouchá.", foreground="green")
+            self.lbl_qber.config(text=txt + "\n✔ šum je pravděpodobnější než Eve → klíč platí.",
+                                 foreground="green")
             self.say("Sifting: Alice a Bob si VEŘEJNĚ řekli báze (ne bity!) a nechali jen qubity se shodnou bází. "
                      "Modré testovací bity veřejně porovnali → chyb je málo. Prvních 16 zelených bitů je klíč – "
                      "každý si ho složí SÁM ze svých dat.")

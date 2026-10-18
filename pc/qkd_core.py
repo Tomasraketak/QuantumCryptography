@@ -20,10 +20,10 @@ import time
 
 import qcrypt
 
-N_QUBITS = 64
 KEY_BITS = 16
-MIN_TEST = 8
 QBER_LIMIT = 0.11
+NOISE = 0.03           # očekávaný šum optiky bez Eve
+EVE_ERR = 0.25         # chybovost, kterou způsobí Eve (změř a pošli znovu)
 VALID_TIMEOUT = 15     # s, déle bez L / W = chyba
 
 # stav HWP pro (báze, bit); báze 0 = HV, 1 = DA; bit 0 = H/D, bit 1 = V/A
@@ -163,6 +163,17 @@ class PublicChannel:
         return data
 
 
+def eve_probability(n, e):
+    """Jak pravděpodobné je, že poslouchá Eve, když z n testovacích bitů vyšlo e chyb.
+    Bayes s apriorní šancí 50 : 50 - porovnáme, co je pravděpodobnější:
+    šum optiky (NOISE) nebo Eve (EVE_ERR). Bez testovacích bitů nevíme nic -> 0.5."""
+    if n == 0:
+        return 0.5
+    l_eve = EVE_ERR ** e * (1 - EVE_ERR) ** (n - e)
+    l_ok = NOISE ** e * (1 - NOISE) ** (n - e)
+    return l_eve / (l_eve + l_ok)
+
+
 def bits_str(bits):
     return "".join(str(b) for b in bits)
 
@@ -200,36 +211,48 @@ class Alice(threading.Thread):
                 self.ev.put(("ERROR", f"Alice: {e}"))
 
     def one_round(self):
-        bits = [random.randint(0, 1) for _ in range(N_QUBITS)]
-        bases = [random.randint(0, 1) for _ in range(N_QUBITS)]
-        # --- kvantová fáze
-        for i in range(N_QUBITS):
-            self.hw.cmd(ALICE_CMD[(bases[i], bits[i])])
-            self.ev.put(("A", i, bases[i], bits[i]))
-            self.ch.send("alice", "bob", "READY", i)
-            self.ch.recv("alice", "BOB_READY")
-            self.hw.cmd("O")                         # laser svítí
-            self.ch.send("alice", "bob", "OPEN", i)
-            self.ch.recv("alice", "MEASURED")
-            self.hw.cmd("C")                         # laser zakrytý
-            self.ch.send("alice", "bob", "CLOSED", i)
-            self.ch.recv("alice", "DARK")
-        self.hw.cmd("V")                             # HWP do nuly (V)
-        # --- sifting
-        bob_bases, bob_valid = self.ch.recv("alice", "BOB_BASES")
-        self.ch.send("alice", "bob", "ALICE_BASES", bases, bits_str(bases))
-        sifted = [bits[i] for i in range(N_QUBITS) if bob_valid[i] and bases[i] == bob_bases[i]]
+        bits, bases, sifted = [], [], []
+        k = self.n
+        while True:
+            # --- kvantová fáze: dávka k qubitů (veřejně ohlásíme kolik)
+            start = len(bits)
+            self.ch.send("alice", "bob", "BATCH", k, f"{k} qubitů (č. {start + 1}–{start + k})")
+            for i in range(start, start + k):
+                bits.append(random.randint(0, 1))
+                bases.append(random.randint(0, 1))
+                self.hw.cmd(ALICE_CMD[(bases[i], bits[i])])
+                self.ev.put(("A", i, bases[i], bits[i]))
+                self.ch.send("alice", "bob", "READY", i)
+                self.ch.recv("alice", "BOB_READY")
+                self.hw.cmd("O")                         # laser svítí
+                self.ch.send("alice", "bob", "OPEN", i)
+                self.ch.recv("alice", "MEASURED")
+                self.hw.cmd("C")                         # laser zakrytý
+                self.ch.send("alice", "bob", "CLOSED", i)
+                self.ch.recv("alice", "DARK")
+            self.hw.cmd("V")                             # HWP do nuly (V)
+            # --- sifting této dávky
+            bob_bases, bob_valid = self.ch.recv("alice", "BOB_BASES")
+            self.ch.send("alice", "bob", "ALICE_BASES", bases[start:], bits_str(bases[start:]))
+            sifted += [bits[i] for j, i in enumerate(range(start, len(bits)))
+                       if bob_valid[j] and bases[i] == bob_bases[j]]
+            if len(sifted) >= KEY_BITS:
+                break
+            if self.extra <= 0:                          # nedoposílat -> kolo znovu
+                self.ch.send("alice", "bob", "VERDICT", "FEW")
+                self.ev.put(("RESULT", "FEW", None, None, [], 0))
+                return False
+            k = self.extra                               # doposlat další
+        # --- test odposlechu: vše nad 16 bitů klíče
         test = sifted[KEY_BITS:]
-        if len(test) < MIN_TEST:
-            self.ch.send("alice", "bob", "VERDICT", "FEW")
-            self.ev.put(("RESULT", "FEW", None))
-            return False
-        self.ch.send("alice", "bob", "TEST_BITS", test, bits_str(test))
-        errors = self.ch.recv("alice", "ERRORS")
-        qber = errors / len(test)
-        verdict = "OK" if qber <= QBER_LIMIT else "FAIL"
+        errors = 0
+        if test:
+            self.ch.send("alice", "bob", "TEST_BITS", test, bits_str(test))
+            errors = self.ch.recv("alice", "ERRORS")
+        p_eve = eve_probability(len(test), errors)
+        verdict = "FAIL" if p_eve > 0.5 else "OK"
         self.ch.send("alice", "bob", "VERDICT", verdict)
-        self.ev.put(("RESULT", verdict, qber))
+        self.ev.put(("RESULT", verdict, errors / len(test) if test else None, p_eve, test, errors))
         if verdict == "OK":
             self.key = int(bits_str(sifted[:KEY_BITS]), 2)
         return verdict == "OK"
@@ -270,37 +293,45 @@ class Bob(threading.Thread):
                 self.ev.put(("ERROR", f"Bob: {e}"))
 
     def one_round(self):
-        bases, results = [], []
-        for i in range(N_QUBITS):
-            self.ch.recv("bob", "READY", timeout=None if i == 0 else 60)  # pauza mezi koly
-            b = random.randint(0, 1)
-            self.hw.cmd(BOB_CMD[b])
-            bases.append(b)
-            self.hw.clear()                          # staré L/W zahodit
-            self.ch.send("bob", "alice", "BOB_READY", i)
-            self.ch.recv("bob", "OPEN")
-            d = self.hw.wait("L")                    # VALID na 1: "10" nebo "01"
-            res = {"10": 0, "01": 1}.get(d)          # jinak ztráta
-            results.append(res)
-            self.ev.put(("B", i, b, res))
-            self.ch.send("bob", "alice", "MEASURED", i)
-            self.ch.recv("bob", "CLOSED")
-            self.hw.wait("W")                        # VALID = 0 + 100 ms
-            self.ch.send("bob", "alice", "DARK", i)
-        self.hw.cmd("+")                             # HWP do nuly
-        valid = [r is not None for r in results]
-        self.ch.send("bob", "alice", "BOB_BASES", (bases, valid),
-                     f"báze {bits_str(bases)}\nzachyceno {bits_str(int(v) for v in valid)}")
-        alice_bases = self.ch.recv("bob", "ALICE_BASES")
-        sifted = [results[i] for i in range(N_QUBITS) if valid[i] and bases[i] == alice_bases[i]]
-        kind, data = self.ch.box["bob"].get(timeout=60)
-        if kind == "VERDICT":                        # FEW - málo bitů
-            return
-        test = data                                  # TEST_BITS
-        errors = sum(a != b for a, b in zip(test, sifted[KEY_BITS:]))
-        self.ch.send("bob", "alice", "ERRORS", errors)
-        self.ev.put(("BOB_QBER", errors / len(test) if test else 0))
-        if self.ch.recv("bob", "VERDICT") == "OK":
+        bases, results, sifted = [], [], []
+        first = True
+        while True:
+            kind, data = self.ch.box["bob"].get(timeout=None if first else 60)  # pauza mezi koly
+            first = False
+            if kind == "STOP":
+                raise SystemExit
+            if kind != "BATCH":
+                break                                    # TEST_BITS nebo VERDICT
+            start = len(bases)
+            for i in range(start, start + data):
+                self.ch.recv("bob", "READY")
+                b = random.randint(0, 1)
+                self.hw.cmd(BOB_CMD[b])
+                bases.append(b)
+                self.hw.clear()                          # staré L/W zahodit
+                self.ch.send("bob", "alice", "BOB_READY", i)
+                self.ch.recv("bob", "OPEN")
+                d = self.hw.wait("L")                    # VALID na 1: "10" nebo "01"
+                res = {"10": 0, "01": 1}.get(d)          # jinak ztráta
+                results.append(res)
+                self.ev.put(("B", i, b, res))
+                self.ch.send("bob", "alice", "MEASURED", i)
+                self.ch.recv("bob", "CLOSED")
+                self.hw.wait("W")                        # VALID = 0 + 100 ms
+                self.ch.send("bob", "alice", "DARK", i)
+            self.hw.cmd("+")                             # HWP do nuly
+            valid = [r is not None for r in results[start:]]
+            self.ch.send("bob", "alice", "BOB_BASES", (bases[start:], valid),
+                         f"báze {bits_str(bases[start:])}\nzachyceno {bits_str(int(v) for v in valid)}")
+            alice_bases = self.ch.recv("bob", "ALICE_BASES")
+            sifted += [results[i] for j, i in enumerate(range(start, len(bases)))
+                       if valid[j] and bases[i] == alice_bases[j]]
+        if kind == "TEST_BITS":
+            errors = sum(a != b for a, b in zip(data, sifted[KEY_BITS:]))
+            self.ch.send("bob", "alice", "ERRORS", errors)
+            self.ev.put(("BOB_QBER", errors / len(data)))
+            kind, data = "VERDICT", self.ch.recv("bob", "VERDICT")
+        if data == "OK":
             self.key = int(bits_str(sifted[:KEY_BITS]), 2)
 
     def receive_image(self):
@@ -326,8 +357,9 @@ class Session:
         self.ch = PublicChannel(events)
         self.alice = self.bob = None
 
-    def start(self):
+    def start(self, n=64, extra=16):
         self.alice = Alice(self.alice_hw, self.ch, self.events)
+        self.alice.n, self.alice.extra = n, extra
         self.bob = Bob(self.bob_hw, self.ch, self.events)
         self.bob.start()
         self.alice.start()
