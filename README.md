@@ -7,15 +7,25 @@ Alice (vysílač) a Bob (přijímač), každý Arduino Uno + CNC shield V3, prop
 |---|---|---|
 | Krokáč HWP | osa X: STEP D2, DIR D5, EN D8 | osa X: STEP D2, DIR D5, EN D8 |
 | Servo shutter | D9 (X-limit) | – |
-| Detektory | – | D9 det1 (H/D = bit 0), D10 det2 (V/A = bit 1), **D3 VALID** (pin Y.STEP – v Y slotu nesmí být driver; D3 umí přerušení) |
+| Detektory | – | **D7 detektor 0** (H/D = bit 0), **D6 detektor 1** (V/A = bit 1), **D3 VALID** (pin Y.STEP – v Y slotu nesmí být driver; D3 umí přerušení) |
 | Link | A0 RX ← Bob A1, A1 TX → Bob A0 | A0 RX ← Alice A1, A1 TX → Alice A0 |
 
 **Společná GND!** Úroveň detektorů nastav v `ACTIVE` (bob.ino), mikrokrokování v `STEPS_PER_REV`.
 
-## Příkazy (Serial Monitor 115200)
-- Alice: `g` start, `o`/`c` shutter otevřít/zavřít.
-- Bob: `d` vypíše stav det1, det2, VALID.
-- Před startem natoč obě HWP ručně do nuly (H prochází na det1). Úhly a servo dolaď v konstantách `UHEL`, `UHEL_BAZE`, `SERVO_OTEVRENO/ZAVRENO`.
+## Úhly HWP (vůči nule)
+Alice: V = 0°, H = 45°, D = −22,5°, A = +22,5°. Bob: báze HV = 0°, báze DA = +22,5°.
+Kdykoli laser HWP nepotřebuje (po kvantové fázi, po neúspěšném kole), jdou obě HWP na 0° (vertikální polarizace).
+
+## Příkazy (Serial Monitor 115200, konec řádku „Newline“)
+| příkaz | Alice | Bob |
+|---|---|---|
+| `a 22.5` | HWP na úhel (i záporný) | stejné |
+| `j 10` / `j -10` | posun o kroky | stejné |
+| `z` | aktuální polohu nastav jako ZERO | stejné |
+| `0` | HWP do nuly (příprava na vypnutí) | stejné |
+| ostatní | `g` start, `o`/`c` shutter, `H V D A` nastav stav | `d` stav detektorů a VALID, `h`/`x` báze HV/DA |
+
+Kalibrace: `j` dotoč HWP tak, aby u Alice šla vertikální polarizace, a dej `z`. U Boba tak, aby V dopadalo na detektor 1, a `z`. Před vypnutím pošli oběma `0`.
 
 ## Protokol
 Jeden qubit (kvantový kanál):

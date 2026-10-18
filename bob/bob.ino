@@ -1,12 +1,13 @@
 // =====================================================================
 //  BOB - prijimac BB84  (Arduino Uno + CNC shield)
 //
-//  HWP (krokac na ose X) -> polarizacni delic -> detektor 1 / detektor 2
-//  baze HV: HWP 0°,  baze DA: HWP 22.5° (otoci D na H)
-//  detektor 1 = bit 0 (H/D),  detektor 2 = bit 1 (V/A)
+//  HWP (krokac na ose X) -> polarizacni delic -> detektor 0 / detektor 1
+//  baze HV: HWP 0°,  baze DA: HWP 22.5° (otoci D na H a A na V)
+//  detektor 0 = bit 0 (H/D),  detektor 1 = bit 1 (V/A)
+//  Kdyz se nemeri, stoji HWP na 0°.
 //  VALID = detektor ma platne mereni -> preruseni na D3
 //
-//  USB (115200): vypisy pro cloveka i pro GUI, prikaz d = stav detektoru
+//  USB (115200): vypisy pro cloveka i pro GUI, prikazy viz loop()
 //  Linka k Alici: SoftwareSerial A0 = RX, A1 = TX (zapojit krizem!)
 // =====================================================================
 #include <SoftwareSerial.h>
@@ -16,8 +17,8 @@
 #define DIR_PIN   5    // krokac X - smer
 #define EN_PIN    8    // LOW = driver zapnuty
 #define VALID_PIN 3    // Y.STEP (bez Y driveru) - jen D2/D3 umi preruseni
-#define DET1_PIN  9    // X-limit
-#define DET2_PIN  10   // Y-limit
+#define DET0_PIN  7    // detektor 0 (H) -> bit 0
+#define DET1_PIN  6    // detektor 1 (V) -> bit 1
 SoftwareSerial link(A0, A1);
 
 // ----- nastaveni -----
@@ -34,23 +35,27 @@ char radek[80];
 
 // ----- preruseni: VALID prave sel do HIGH -----
 volatile bool mereniHotovo = false;
-volatile byte det1, det2;
+volatile byte det0, det1;
 void onValid() {
-  det1 = digitalRead(DET1_PIN);   // detektory cteme hned v okamziku platnosti
-  det2 = digitalRead(DET2_PIN);
+  det0 = digitalRead(DET0_PIN);   // detektory cteme hned v okamziku platnosti
+  det1 = digitalRead(DET1_PIN);
   mereniHotovo = true;
 }
 
 // ================= pomocne funkce =================
-void natocHWP(float stupne) {
-  long cil = stupne * KROKU_NA_OTACKU / 360;
-  long kroky = cil - poloha;
+// Otoci krokacem o dany pocet kroku (zaporne = opacnym smerem).
+void krokuj(long kroky) {
   digitalWrite(DIR_PIN, kroky > 0 ? HIGH : LOW);
   for (long k = 0; k < abs(kroky); k++) {
     digitalWrite(STEP_PIN, HIGH); delayMicroseconds(600);
     digitalWrite(STEP_PIN, LOW);  delayMicroseconds(600);
   }
-  poloha = cil;
+  poloha += kroky;
+}
+
+// Natoci HWP na uhel ve stupnich vuci nule.
+void natocHWP(float stupne) {
+  krokuj(lround(stupne * KROKU_NA_OTACKU / 360) - poloha);
 }
 
 // Precte jeden radek z linky (ceka libovolne dlouho).
@@ -70,14 +75,28 @@ void posliBity(const char *nazev, byte *b) {
   link.println();
 }
 
+// ================= kalibrace (prikazy z USB) =================
+//   a <stupne>  natoc HWP na uhel (napr. a 22.5 nebo a -22.5)
+//   j <kroky>   posun o kroky (napr. j 10 nebo j -10)
+//   z           aktualni poloha = nula (ZERO)
+//   0           HWP do nuly (priprava na vypnuti)
+void kalibrace(String cmd) {
+  if (cmd.startsWith("a")) natocHWP(cmd.substring(1).toFloat());
+  if (cmd.startsWith("j")) krokuj(cmd.substring(1).toInt());
+  if (cmd == "z") poloha = 0;
+  if (cmd == "0") natocHWP(0);
+  Serial.print(F("HWP poloha: ")); Serial.print(poloha); Serial.print(F(" kroku = "));
+  Serial.print(poloha * 360.0 / KROKU_NA_OTACKU); Serial.println(F(" st."));
+}
+
 // ================= mereni jednoho qubitu =================
 // Alice uz otevrela shutter. Cekame na preruseni od VALID.
 void zmer(int i) {
   unsigned long start = millis();
   while (!mereniHotovo && millis() - start < MAX_CEKANI) { }
 
-  platne[i] = mereniHotovo && (det1 != det2);   // svitit ma prave jeden detektor
-  bit[i] = (det2 == HIGH) ? 1 : 0;
+  platne[i] = mereniHotovo && (det0 != det1);   // svitit ma prave jeden detektor
+  bit[i] = (det1 == HIGH) ? 1 : 0;
   mereniHotovo = false;
 
   Serial.print(F("#B ")); Serial.print(i); Serial.print(' ');
@@ -108,6 +127,7 @@ void zpracujZpravu() {
     link.println(F("D"));
   }
   else if (radek[0] == 'S') {                   // sifting: posli sve baze
+    natocHWP(0);                                // merit uz nebudeme -> HWP do nuly
     posliBity("BB", baze);
     posliBity("BV", platne);
   }
@@ -141,21 +161,29 @@ void setup() {
   pinMode(STEP_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);
   pinMode(EN_PIN, OUTPUT); digitalWrite(EN_PIN, LOW);
+  pinMode(DET0_PIN, INPUT);
   pinMode(DET1_PIN, INPUT);
-  pinMode(DET2_PIN, INPUT);
   pinMode(VALID_PIN, INPUT);
   attachInterrupt(digitalPinToInterrupt(VALID_PIN), onValid, RISING);
   Serial.begin(115200);
   link.begin(9600);
   randomSeed(analogRead(A2) * 31 + analogRead(A3) + micros());
-  Serial.println(F("BOB pripraven, cekam na Alici. d = stav detektoru"));
+  Serial.println(F("BOB pripraven, cekam na Alici. d = stav detektoru,"));
+  Serial.println(F("  a <st> / j <kroky> / z = nula / 0 = HWP do nuly, h/x = baze HV/DA"));
 }
 
 void loop() {
-  if (Serial.available() && Serial.read() == 'd') {
-    Serial.print(F("det1=")); Serial.print(digitalRead(DET1_PIN));
-    Serial.print(F(" det2=")); Serial.print(digitalRead(DET2_PIN));
-    Serial.print(F(" valid=")); Serial.println(digitalRead(VALID_PIN));
+  if (Serial.available()) {
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    if (cmd == "d") {
+      Serial.print(F("det0=")); Serial.print(digitalRead(DET0_PIN));
+      Serial.print(F(" det1=")); Serial.print(digitalRead(DET1_PIN));
+      Serial.print(F(" valid=")); Serial.println(digitalRead(VALID_PIN));
+    }
+    else if (cmd == "h") natocHWP(UHEL_BAZE[0]);
+    else if (cmd == "x") natocHWP(UHEL_BAZE[1]);
+    else kalibrace(cmd);
   }
   if (link.available()) {
     prectiRadek();

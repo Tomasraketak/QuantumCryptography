@@ -4,10 +4,11 @@
 //  laser -> shutter (servo) -> polarizator H -> HWP (krokac na ose X)
 //
 //  bit 0 = H nebo D,  bit 1 = V nebo A
-//  HWP otoci polarizaci o dvojnasobek sveho uhlu:
-//     H = 0°,  V = 45°,  D = 22.5°,  A = 67.5°
+//  HWP otoci polarizaci o dvojnasobek sveho uhlu (vuci nule HWP):
+//     V = 0°,  H = 45°,  D = -22.5°,  A = +22.5°
+//  Kdyz laser HWP nepotrebuje, stoji HWP na 0° (vertikalni polarizace).
 //
-//  USB (115200): vypisy pro cloveka i pro GUI, prikazy g / o / c
+//  USB (115200): vypisy pro cloveka i pro GUI, prikazy viz loop()
 //  Linka k Bobovi: SoftwareSerial A0 = RX, A1 = TX (zapojit krizem!)
 // =====================================================================
 #include <SoftwareSerial.h>
@@ -25,7 +26,8 @@ Servo shutter;
 const long KROKU_NA_OTACKU = 3200;  // 200 kroku * 16 mikrokroku
 const int  SERVO_OTEVRENO  = 90;
 const int  SERVO_ZAVRENO   = 110;   // o 20° dal = laser zakryty
-const float UHEL[2][2] = { {0, 45}, {22.5, 67.5} };  // [baze][bit], baze 0 = HV, 1 = DA
+// UHEL[baze][bit]: baze 0 = HV (bit 0 = H, 1 = V), baze 1 = DA (bit 0 = D, 1 = A)
+const float UHEL[2][2] = { {45, 0}, {-22.5, 22.5} };
 
 const int N   = 64;     // pocet qubitu v jednom kole
 const int KLIC = 16;    // delka klice v bitech
@@ -39,15 +41,19 @@ long poloha = 0;         // poloha krokace v krocich
 char radek[80];          // prijata zprava z linky
 
 // ================= pomocne funkce =================
-void natocHWP(float stupne) {
-  long cil = stupne * KROKU_NA_OTACKU / 360;
-  long kroky = cil - poloha;
+// Otoci krokacem o dany pocet kroku (zaporne = opacnym smerem).
+void krokuj(long kroky) {
   digitalWrite(DIR_PIN, kroky > 0 ? HIGH : LOW);
   for (long k = 0; k < abs(kroky); k++) {
     digitalWrite(STEP_PIN, HIGH); delayMicroseconds(600);
     digitalWrite(STEP_PIN, LOW);  delayMicroseconds(600);
   }
-  poloha = cil;
+  poloha += kroky;
+}
+
+// Natoci HWP na uhel ve stupnich vuci nule.
+void natocHWP(float stupne) {
+  krokuj(lround(stupne * KROKU_NA_OTACKU / 360) - poloha);
 }
 
 // Precte jeden radek z linky. Vraci false, kdyz do 'ms' nic neprijde.
@@ -82,6 +88,20 @@ void nactiBity(const char *text, byte *b) {   // opak posliBity
   for (int i = 0; i < N; i++) b[i] = text[i] - '0';
 }
 
+// ================= kalibrace (prikazy z USB) =================
+//   a <stupne>  natoc HWP na uhel (napr. a 22.5 nebo a -22.5)
+//   j <kroky>   posun o kroky (napr. j 10 nebo j -10)
+//   z           aktualni poloha = nula (ZERO)
+//   0           HWP do nuly (priprava na vypnuti)
+void kalibrace(String cmd) {
+  if (cmd.startsWith("a")) natocHWP(cmd.substring(1).toFloat());
+  if (cmd.startsWith("j")) krokuj(cmd.substring(1).toInt());
+  if (cmd == "z") poloha = 0;
+  if (cmd == "0") natocHWP(0);
+  Serial.print(F("HWP poloha: ")); Serial.print(poloha); Serial.print(F(" kroku = "));
+  Serial.print(poloha * 360.0 / KROKU_NA_OTACKU); Serial.println(F(" st."));
+}
+
 // ================= 1. kvantova faze =================
 bool kvantovaFaze() {
   for (int i = 0; i < N; i++) {
@@ -100,6 +120,7 @@ bool kvantovaFaze() {
     link.println(F("Z"));
     if (!cekejNa("D")) return false;            // detektor zhasl + 100 ms
   }
+  natocHWP(0);                                  // hotovo -> HWP do nuly
   return true;
 }
 
@@ -147,6 +168,7 @@ void spustQKD() {
   for (int kolo = 1; ; kolo++) {
     Serial.print(F("#ROUND ")); Serial.println(kolo);
     if (kvantovaFaze() && sifting(klic)) break;
+    natocHWP(0);
     delay(1000);
   }
   Serial.print(F("KEY:"));
@@ -175,13 +197,20 @@ void setup() {
   Serial.begin(115200);
   link.begin(9600);
   randomSeed(analogRead(A2) * 31 + analogRead(A3) + micros());
-  Serial.println(F("ALICE pripravena. g = start, o/c = shutter otevrit/zavrit"));
+  Serial.println(F("ALICE pripravena. g = start, o/c = shutter otevrit/zavrit,"));
+  Serial.println(F("  a <st> / j <kroky> / z = nula / 0 = HWP do nuly, H V D A = nastav stav"));
 }
 
 void loop() {
   if (!Serial.available()) return;
-  char c = Serial.read();
-  if (c == 'g') spustQKD();
-  if (c == 'o') shutter.write(SERVO_OTEVRENO);
-  if (c == 'c') shutter.write(SERVO_ZAVRENO);
+  String cmd = Serial.readStringUntil('\n');
+  cmd.trim();
+  if      (cmd == "g") spustQKD();
+  else if (cmd == "o") shutter.write(SERVO_OTEVRENO);
+  else if (cmd == "c") shutter.write(SERVO_ZAVRENO);
+  else if (cmd == "H") natocHWP(UHEL[0][0]);
+  else if (cmd == "V") natocHWP(UHEL[0][1]);
+  else if (cmd == "D") natocHWP(UHEL[1][0]);
+  else if (cmd == "A") natocHWP(UHEL[1][1]);
+  else kalibrace(cmd);
 }

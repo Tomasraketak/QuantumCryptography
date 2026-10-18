@@ -17,8 +17,8 @@ from qkd_core import KEY_BITS, N_QUBITS, QBER_LIMIT, Round, SerialBackend, SimBa
 
 BASIS = ["HV  (+)", "DA  (×)"]
 POL = {(0, 0): "↔  H", (0, 1): "↕  V", (1, 0): "⤢  D", (1, 1): "⤡  A"}
-HWP = {(0, 0): "0°", (0, 1): "45°", (1, 0): "22.5°", (1, 1): "67.5°"}
-DET = {0: "detektor 1 → 0", 1: "detektor 2 → 1", None: "nic (ztráta)"}
+HWP = {(0, 0): "45°", (0, 1): "0°", (1, 0): "-22.5°", (1, 1): "+22.5°"}
+DET = {0: "detektor 0 → 0", 1: "detektor 1 → 1", None: "nic (ztráta)"}
 PREVIEW = 200
 
 INTRO = ("1) Připoj obě Arduina (nebo zapni simulaci) a stiskni START.\n"
