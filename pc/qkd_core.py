@@ -55,8 +55,16 @@ class SerialDevice:
             if not line:
                 continue
             self.log("Arduino", line)
-            if line[0] in "LW":
+            if line[0] == "L" or line == "W":
                 self.events.put(line)        # samo od Arduina (VALID)
+            # --- kamarádčin firmware: jiné texty, stejný význam
+            elif line.startswith("COUNT=") and "D0=" in line:
+                f = dict(x.split("=") for x in line.split())
+                self.events.put("L" + f["D0"] + f["D1"])
+            elif line.startswith("VALIDITY = 0"):  # bez 100 ms -> počkáme tady
+                threading.Timer(0.1, self.events.put, ["W"]).start()
+            elif line.startswith("OK BOTH"):       # samo vrátilo HWP na 0
+                pass
             else:
                 self.replies.put(line)       # odpověď na příkaz
 
@@ -68,6 +76,8 @@ class SerialDevice:
                 line = self.replies.get(timeout=6)
             except queue.Empty:
                 raise IOError(f"žádná odpověď na '{c}'")
+            if line.startswith("ERR"):
+                raise IOError(f"Arduino: {line} (příkaz '{c}' – nejdřív ZERO1 a ZERO2?)")
             return line[3:] if line.startswith("OK ") else line
 
     def wait(self, kind, timeout=VALID_TIMEOUT):

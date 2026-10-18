@@ -184,6 +184,22 @@ Když `L` nebo `W` nepřijde do **15 s**, Python vypíše chybu („VALID nesko�
 
 ---
 
+### Kamarádčin firmware (také funguje)
+
+Python umí i variantu firmwaru, která místo `L..` a `W` posílá delší texty:
+
+| její firmware | Python to bere jako |
+|---|---|
+| `COUNT=5 ALICE=H BOB=+ D0=1 D1=0` | `L10` |
+| `VALIDITY = 0 - LIGHT OFF` | `W` (Python sám počká 100 ms) |
+| `OK BOTH BACK_TO_ZERO` | jen informace, ignoruje se |
+| `ERR …` | chyba, vypíše se ve stavovém řádku |
+
+U téhle varianty musíš **po kalibraci poslat `ZERO1` a `ZERO2`**, jinak Arduino odmítne `V H D A + X`.
+Ladicí příkaz `d` tam není, místo něj napiš do pole `STATUS`.
+
+---
+
 ## 7. Průběh jednoho qubitu (časování)
 
 ```
