@@ -66,6 +66,8 @@ class App:
         self.btn_conn.pack(side="left", padx=6)
         self.btn_start = ttk.Button(top, text="▶ START – vytvořit klíč", command=self.start, state="disabled")
         self.btn_start.pack(side="left")
+        self.btn_next = ttk.Button(top, text="⏭ Další kolo", command=self.next_round, state="disabled")
+        self.btn_next.pack(side="left", padx=4)
         ttk.Button(top, text="⏻ HWP na 0 (vypnutí)", command=self.park).pack(side="left", padx=6)
         self.status = ttk.Label(top, text="Nepřipojeno")
         self.status.pack(side="left", padx=8)
@@ -266,6 +268,15 @@ class App:
 
     def handle(self, kind, *a):
         getattr(self, "on_" + kind, lambda *x: None)(*a)
+
+    def next_round(self):
+        self.btn_next.config(state="disabled")
+        self.session.next_round()
+
+    def on_PAUSE(self, rnd):
+        self.btn_next.config(state="normal")
+        self.say(self.explain.cget("text") + f"\n⏸ Kolo {rnd} nevyšlo – prohlédni si tabulku "
+                 "(červená = chyba, šedá = zahozeno) a pak klikni „⏭ Další kolo“.")
 
     def on_ERROR(self, text):
         self.status.config(text=text)

@@ -153,8 +153,8 @@ class PublicChannel:
         self.events.put(("PUB", frm, kind, data if show is None else show))
         self.box[to].put((kind, data))
 
-    def recv(self, who, kind):
-        k, data = self.box[who].get(timeout=60)
+    def recv(self, who, kind, timeout=60):
+        k, data = self.box[who].get(timeout=timeout)
         if k == "STOP":
             raise SystemExit
         if k != kind:
@@ -173,6 +173,7 @@ class Alice(threading.Thread):
         self.hw, self.ch, self.ev = hw, ch, events
         self.key = None              # soukromé!
         self.images = queue.Queue()
+        self.go_on = threading.Event()
 
     def run(self):
         try:
@@ -180,7 +181,9 @@ class Alice(threading.Thread):
                 self.ev.put(("ROUND", rnd))
                 if self.one_round():
                     break
-                time.sleep(1)
+                self.ev.put(("PAUSE", rnd))   # počkej, až uživatel klikne „Další kolo“
+                self.go_on.wait()
+                self.go_on.clear()
             self.ev.put(("KEY", "alice", self.key))
             while True:                       # čekáme na obrázky k odeslání
                 self.send_image(*self.images.get())
@@ -261,7 +264,7 @@ class Bob(threading.Thread):
     def one_round(self):
         bases, results = [], []
         for i in range(N_QUBITS):
-            self.ch.recv("bob", "READY")
+            self.ch.recv("bob", "READY", timeout=None if i == 0 else 60)  # pauza mezi koly
             b = random.randint(0, 1)
             self.hw.cmd(BOB_CMD[b])
             bases.append(b)
@@ -320,6 +323,9 @@ class Session:
         self.bob = Bob(self.bob_hw, self.ch, self.events)
         self.bob.start()
         self.alice.start()
+
+    def next_round(self):
+        self.alice.go_on.set()
 
     def send_image(self, img, size, mode):
         self.alice.images.put((img, size, mode))
