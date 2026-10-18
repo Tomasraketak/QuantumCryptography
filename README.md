@@ -123,7 +123,7 @@ Obě Arduina: **Arduino Uno + CNC shield V3**. Krokový motor je na ose **X** (d
 | | Alice | Bob |
 |---|---|---|
 | Krokáč HWP | STEP D2, DIR D5, EN D8 (LOW = zapnuto) | STEP D2, DIR D5, EN D8 |
-| Servo shutteru | D9 (Z+/endstop pin na shieldu) | – |
+| Servo shutteru | D9 (na shieldu pin X limit/endstop) | – |
 | Detektor 0 (bit 0, H/D) | – | **D7** |
 | Detektor 1 (bit 1, V/A) | – | **D6** |
 | VALID (měření platné) | – | **D3** – přerušení |
