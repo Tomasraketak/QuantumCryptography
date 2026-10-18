@@ -281,7 +281,7 @@ python pc/qkd_gui.py
 
 ## 11. Popis GUI
 
-- **Horní řádek:** port Arduina, Simulace, Eve poslouchá, Připojit, START.
+- **Horní řádek:** port Arduina, Simulace, Eve poslouchá, Připojit, START, **⏻ HWP na 0 (vypnutí)**.
 - **Ruční ovládání:** tlačítka pro Alici (`V H D A O C ZERO1`) a Boba (`+ X ZERO2 d`). Do pole se píše `k15` (Alice) nebo `K15` (Bob) a Enter. Slouží ke kalibraci a testu.
 - **Žlutý pruh:** vysvětluje, co se právě děje.
 - **Tabulka qubitů:** číslo, Alicina báze/bit/úhel HWP/polarizace, Bobova báze/úhel HWP/naměřená hodnota, shoda bází a použití bitu. Barvy:
@@ -309,7 +309,7 @@ python pc/qkd_gui.py
    - Alice `H` → detektor 0;
    - Alice `D` + Bob `A` → detektor 0;
    - Alice `A` + Bob `A` → detektor 1.
-5. Před vypnutím pošli **`V`** (Alice) a **`+`** (Bob), aby po zapnutí začínaly z nuly. Arduino si polohu nepamatuje, po zapnutí bere aktuální polohu jako 0.
+5. Před vypnutím klikni na **⏻ HWP na 0 (vypnutí)** (pošle `V` Alici a `+` Bobovi), aby po zapnutí začínaly z nuly. Arduino si polohu nepamatuje, po zapnutí bere aktuální polohu jako 0.
 
 Když nesedí směr otáčení nebo počet kroků, uprav `KROKU_NA_OTACKU` (3200 = 200 kroků × 16 mikrokroků) nebo prohoď vodiče cívky.
 

@@ -66,6 +66,7 @@ class App:
         self.btn_conn.pack(side="left", padx=6)
         self.btn_start = ttk.Button(top, text="▶ START – vytvořit klíč", command=self.start, state="disabled")
         self.btn_start.pack(side="left")
+        ttk.Button(top, text="⏻ HWP na 0 (vypnutí)", command=self.park).pack(side="left", padx=6)
         self.status = ttk.Label(top, text="Nepřipojeno")
         self.status.pack(side="left", padx=8)
 
@@ -234,6 +235,18 @@ class App:
         try:
             r = self.devices[who].cmd(c.strip())
             self.status.config(text=f"{who}: {c} → {r}")
+        except Exception as e:
+            self.status.config(text=f"Chyba: {e}")
+
+    def park(self):
+        """Obě HWP do nuly - pak lze Arduino odpojit a po zapnutí začne z nuly."""
+        if not self.devices or (self.session and not self.keys):
+            self.status.config(text="Nejde: nepřipojeno nebo právě běží tvorba klíče")
+            return
+        try:
+            self.devices["alice"].cmd("V")
+            self.devices["bob"].cmd("+")
+            self.status.config(text="Obě HWP jsou na 0 – Arduino můžeš odpojit.")
         except Exception as e:
             self.status.config(text=f"Chyba: {e}")
 
