@@ -7,21 +7,29 @@ Alice (vysílač) a Bob (přijímač), každý Arduino Uno + CNC shield V3, prop
 |---|---|---|
 | Krokáč HWP | osa X: STEP D2, DIR D5, EN D8 | osa X: STEP D2, DIR D5, EN D8 |
 | Servo shutter | D9 (X-limit) | – |
-| Detektory | – | D9 det1 (H/D = bit 0), D10 det2 (V/A = bit 1), D11 valid |
+| Detektory | – | D9 det1 (H/D = bit 0), D10 det2 (V/A = bit 1), **D3 VALID** (pin Y.STEP – v Y slotu nesmí být driver; D3 umí přerušení) |
 | Link | A0 RX ← Bob A1, A1 TX → Bob A0 | A0 RX ← Alice A1, A1 TX → Alice A0 |
 
 **Společná GND!** Úroveň detektorů nastav v `ACTIVE` (bob.ino), mikrokrokování v `STEPS_PER_REV`.
 
-## Kalibrace (Serial Monitor 115200, „Newline“)
-- Alice: `o`/`c` shutter, `a 22.5` HWP na úhel, `j 10` posun o kroky, `z` nulovat, `H V D A` nastav stav.
-- Bob: `d` stav detektorů, `a`, `j`, `z`, `h`/`x` báze HV/DA.
-- Před startem ručně/`j` natoč obě HWP do nuly (H prochází na det1) a dej `z`. Doladit `HWP_ANGLE`, `HWP_BASIS`, `SHUTTER_OPEN/CLOSED`.
+## Příkazy (Serial Monitor 115200)
+- Alice: `g` start, `o`/`c` shutter otevřít/zavřít.
+- Bob: `d` vypíše stav det1, det2, VALID.
+- Před startem natoč obě HWP ručně do nuly (H prochází na det1). Úhly a servo dolaď v konstantách `UHEL`, `UHEL_BAZE`, `SERVO_OTEVRENO/ZAVRENO`.
 
 ## Protokol
-1. Pro každý z `N_QUBITS`=64 qubitů: Alice náhodně bit+báze, nastaví HWP → `R i`; Bob náhodně báze → `K i`; Alice otevře shutter → `P i`; Bob změří → `M i`; shutter zavřít. (~2–3 s/bit, limit 15 s.)
-2. Sifting: Bob pošle báze + které měření bylo validní, Alice pošle báze. Ponechají se shodné báze.
-3. Prvních 16 prosetých bitů = klíč, zbytek (≥ 8) se veřejně porovná → QBER. QBER > 11 % ⇒ odposlech, klíč se zahodí a kolo se opakuje automaticky (intercept-resend Eve dává teoreticky 25 %).
-4. Po `KEY:XXXX` přejdou Arduina do režimu přenosu obrázku.
+Jeden qubit (kvantový kanál):
+
+| Alice | linka | Bob |
+|---|---|---|
+| náhodný bit + báze, natočí HWP | `R i` → | náhodná báze, natočí HWP |
+| | ← `K` | |
+| otevře shutter | `P` → | čeká na přerušení VALID↑ (max 2 s, jinak ztráta), v něm přečte det1/det2 |
+| | ← `M` | |
+| zavře shutter | `Z` → | čeká, až VALID = 0, pak 100 ms |
+| další qubit | ← `D` | |
+
+Po 64 qubitech: Bob pošle báze (`BB`) a které měření bylo platné (`BV`), Alice pošle báze (`AB`). Nechají se jen shodné báze. Prvních 16 bitů = klíč, zbytek (≥ 8) Alice veřejně pošle (`TB`), Bob vrátí počet chyb (`Q`) → QBER. QBER > 11 % ⇒ odposlech (Eve ≈ 25 %), kolo se opakuje. Pak `KEY:XXXX` a přenos obrázku.
 
 ## GUI – vše v jednom okně (PC)
 Obě Arduina zapoj USB do jednoho PC (každé má svůj COM port).

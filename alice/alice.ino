@@ -1,294 +1,187 @@
 // =====================================================================
-//  ALICE  - vysilac BB84 (Arduino Uno + CNC shield V3)
+//  ALICE - vysilac BB84  (Arduino Uno + CNC shield)
 //
-//  Laser -> shutter (servo) -> polarizer (H) -> HWP (krokac, osa X)
+//  laser -> shutter (servo) -> polarizator H -> HWP (krokac na ose X)
 //
-//  Kodovani:  bit 0 = H (baze HV) / D (baze DA)
-//             bit 1 = V (baze HV) / A (baze DA)
-//  HWP otoci polarizaci o 2*theta:  H=0, V=45, D=22.5, A=67.5 stupnu
+//  bit 0 = H nebo D,  bit 1 = V nebo A
+//  HWP otoci polarizaci o dvojnasobek sveho uhlu:
+//     H = 0°,  V = 45°,  D = 22.5°,  A = 67.5°
 //
-//  USB Serial (115200): log + prikazy (viz printHelp)
-//  SoftwareSerial (A0=RX, A1=TX, 9600): klasicky kanal k Bobovi
+//  USB (115200): vypisy pro cloveka i pro GUI, prikazy g / o / c
+//  Linka k Bobovi: SoftwareSerial A0 = RX, A1 = TX (zapojit krizem!)
 // =====================================================================
 #include <SoftwareSerial.h>
 #include <Servo.h>
 
-// ---------------- piny (CNC shield V3) ----------------
-const uint8_t STEP_PIN  = 2;   // X.STEP
-const uint8_t DIR_PIN   = 5;   // X.DIR
-const uint8_t EN_PIN    = 8;   // EN (LOW = driver zapnut)
-const uint8_t SERVO_PIN = 9;   // X-limit header (D9)
-SoftwareSerial link(A0, A1);   // RX, TX  -> krizem na Boba
-
-// ---------------- mechanika ----------------
-const long STEPS_PER_REV = 3200;      // 200 kroku * 16 mikrokroku (dle jumperu)
-const int  STEP_DELAY_US = 600;       // rychlost krokace
-const bool DIR_INVERT    = false;
-const int  SHUTTER_OPEN   = 90;       // uhel serva - laser sviti
-const int  SHUTTER_CLOSED = 110;      // +20 stupnu - laser zastinen
-const int  SHUTTER_MS     = 250;      // cas na pohyb serva
-
-// uhly HWP v desetinach stupne [baze][bit]; doladit kalibraci!
-// baze 0 = HV, baze 1 = DA
-const int HWP_ANGLE[2][2] = { {0, 450}, {225, 675} };
-
-// ---------------- protokol ----------------
-const int   N_QUBITS   = 64;    // poslanych qubitu v jednom kole (nasobek 4)
-const int   KEY_BITS   = 16;    // delka klice
-const int   MIN_TEST   = 8;     // minimum bitu pro odhad QBER
-const float QBER_LIMIT = 0.11;  // nad timto prahem -> Eve
-const unsigned long LINK_TIMEOUT = 10000;
-
+// ----- piny -----
+#define STEP_PIN  2    // krokac X - krok
+#define DIR_PIN   5    // krokac X - smer
+#define EN_PIN    8    // LOW = driver zapnuty
+#define SERVO_PIN 9    // servo shutteru
+SoftwareSerial link(A0, A1);
 Servo shutter;
-long hwpPos = 0;                // aktualni poloha v krocich (0 = nula pri zapnuti)
 
-uint8_t aBit[N_QUBITS], aBase[N_QUBITS];
-uint8_t bBase[N_QUBITS], bValid[N_QUBITS];
-int sifted[N_QUBITS];
-int nSifted = 0;
-uint16_t key = 0;
-bool bridge = false;            // po ziskani klice: USB -> link (obrazek)
+// ----- nastaveni (doladit podle sestavy) -----
+const long KROKU_NA_OTACKU = 3200;  // 200 kroku * 16 mikrokroku
+const int  SERVO_OTEVRENO  = 90;
+const int  SERVO_ZAVRENO   = 110;   // o 20° dal = laser zakryty
+const float UHEL[2][2] = { {0, 45}, {22.5, 67.5} };  // [baze][bit], baze 0 = HV, 1 = DA
 
-char lineBuf[96];
+const int N   = 64;     // pocet qubitu v jednom kole
+const int KLIC = 16;    // delka klice v bitech
+const float PRAH_QBER = 0.11;
+
+// ----- data jednoho kola -----
+byte bit[N], baze[N];    // co poslala Alice
+byte bobBaze[N];         // co rekl Bob (verejne)
+byte bobPlatne[N];       // 1 = Bob neco zmeril
+long poloha = 0;         // poloha krokace v krocich
+char radek[80];          // prijata zprava z linky
 
 // ================= pomocne funkce =================
-void stepMotor(long steps) {
-  digitalWrite(DIR_PIN, (steps > 0) ^ DIR_INVERT ? HIGH : LOW);
-  if (steps < 0) steps = -steps;
-  for (long i = 0; i < steps; i++) {
-    digitalWrite(STEP_PIN, HIGH); delayMicroseconds(STEP_DELAY_US);
-    digitalWrite(STEP_PIN, LOW);  delayMicroseconds(STEP_DELAY_US);
+void natocHWP(float stupne) {
+  long cil = stupne * KROKU_NA_OTACKU / 360;
+  long kroky = cil - poloha;
+  digitalWrite(DIR_PIN, kroky > 0 ? HIGH : LOW);
+  for (long k = 0; k < abs(kroky); k++) {
+    digitalWrite(STEP_PIN, HIGH); delayMicroseconds(600);
+    digitalWrite(STEP_PIN, LOW);  delayMicroseconds(600);
   }
+  poloha = cil;
 }
 
-// HWP ma periodu 90 stupnu (theta a theta+90 dava stejnou polarizaci),
-// proto jedeme vzdy nejkratsi cestou v ramci ctvrt otacky.
-void setHWP(int angle10) {
-  const long Q = STEPS_PER_REV / 4;
-  long target = (long)angle10 * STEPS_PER_REV / 3600;
-  long diff = (target - hwpPos) % Q;
-  if (diff >  Q / 2) diff -= Q;
-  if (diff < -Q / 2) diff += Q;
-  stepMotor(diff);
-  hwpPos = ((hwpPos + diff) % Q + Q) % Q;
-}
-
-void moveHWPAbsolute(int angle10) {       // pro kalibraci - bez zkracovani
-  long target = (long)angle10 * STEPS_PER_REV / 3600;
-  stepMotor(target - hwpPos);
-  hwpPos = target;
-}
-
-void laserOn()  { shutter.write(SHUTTER_OPEN);   delay(SHUTTER_MS); }
-void laserOff() { shutter.write(SHUTTER_CLOSED); delay(SHUTTER_MS); }
-
-bool readLine(Stream &s, char *buf, int len, unsigned long timeout) {
-  unsigned long t0 = millis();
+// Precte jeden radek z linky. Vraci false, kdyz do 'ms' nic neprijde.
+bool prectiRadek(unsigned long ms) {
+  unsigned long start = millis();
   int n = 0;
-  while (millis() - t0 < timeout) {
-    while (s.available()) {
-      char c = s.read();
-      if (c == '\r') continue;
-      if (c == '\n') { buf[n] = 0; if (n) return true; continue; }
-      if (n < len - 1) buf[n++] = c;
-    }
+  while (millis() - start < ms) {
+    if (!link.available()) continue;
+    char c = link.read();
+    if (c == '\n') { radek[n] = 0; if (n > 0) return true; }
+    else if (c != '\r' && n < 79) radek[n++] = c;
   }
-  buf[n] = 0;
   return false;
 }
 
-// cekej na radek zacinajici prefixem (ostatni zahodi)
-bool expect(const char *prefix, unsigned long timeout) {
-  unsigned long t0 = millis();
-  while (millis() - t0 < timeout) {
-    if (readLine(link, lineBuf, sizeof(lineBuf), timeout - (millis() - t0)) &&
-        strncmp(lineBuf, prefix, strlen(prefix)) == 0) return true;
-  }
-  Serial.print(F("! timeout, cekam na ")); Serial.println(prefix);
+// Ceka na zpravu, ktera zacina textem 'zacatek' (jine zpravy preskoci).
+bool cekejNa(const char *zacatek) {
+  while (prectiRadek(10000))
+    if (strncmp(radek, zacatek, strlen(zacatek)) == 0) return true;
+  Serial.print(F("! Bob neodpovida, cekal jsem na ")); Serial.println(zacatek);
   return false;
 }
 
-void bitsToHex(const uint8_t *b, int n, char *out) {
-  const char *H = "0123456789ABCDEF";
-  for (int i = 0; i < n / 4; i++) {
-    uint8_t v = (b[4*i] << 3) | (b[4*i+1] << 2) | (b[4*i+2] << 1) | b[4*i+3];
-    out[i] = H[v];
-  }
-  out[n / 4] = 0;
+// Posle pole nul a jednicek jako text, napr. "AB 0110..."
+void posliBity(const char *nazev, byte *b, int pocet) {
+  link.print(nazev); link.print(' ');
+  for (int i = 0; i < pocet; i++) link.print(b[i]);
+  link.println();
 }
 
-void hexToBits(const char *h, uint8_t *b, int n) {
-  for (int i = 0; i < n / 4; i++) {
-    char c = h[i];
-    uint8_t v = (c >= 'A') ? (c - 'A' + 10) : (c - '0');
-    for (int k = 0; k < 4; k++) b[4*i+k] = (v >> (3 - k)) & 1;
-  }
+void nactiBity(const char *text, byte *b) {   // opak posliBity
+  for (int i = 0; i < N; i++) b[i] = text[i] - '0';
 }
 
-const char *stateName(uint8_t base, uint8_t bit) {
-  static const char *N[2][2] = { {"H", "V"}, {"D", "A"} };
-  return N[base][bit];
-}
-
-void seedRandom() {
-  unsigned long s = micros();
-  for (int i = 0; i < 32; i++)
-    s = (s << 1) ^ analogRead(A2 + (i % 4)) ^ (micros() << 3);
-  randomSeed(s);
-}
-
-// ================= BB84 =================
-bool quantumPhase() {
-  Serial.println(F("--- kvantova faze ---"));
-  Serial.println(F("  i  baze bit stav"));
-  for (int i = 0; i < N_QUBITS; i++) {
-    aBit[i]  = random(2);
-    aBase[i] = random(2);
-    setHWP(HWP_ANGLE[aBase[i]][aBit[i]]);
+// ================= 1. kvantova faze =================
+bool kvantovaFaze() {
+  for (int i = 0; i < N; i++) {
+    bit[i]  = random(2);
+    baze[i] = random(2);
+    natocHWP(UHEL[baze[i]][bit[i]]);
     Serial.print(F("#A ")); Serial.print(i); Serial.print(' ');
-    Serial.print(aBase[i]); Serial.print(' '); Serial.println(aBit[i]);
+    Serial.print(baze[i]); Serial.print(' '); Serial.println(bit[i]);
 
-    link.print(F("R ")); link.println(i);          // Alice pripravena
-    if (!expect("K", LINK_TIMEOUT)) return false;  // Bob nastavil bazi
-    laserOn();
-    link.print(F("P ")); link.println(i);          // puls sviti
-    if (!expect("M", LINK_TIMEOUT)) return false;  // Bob zmeril
-    laserOff();
-
-    char row[32];
-    snprintf(row, sizeof(row), "%3d  %s   %d   %s", i,
-             aBase[i] ? "DA" : "HV", aBit[i], stateName(aBase[i], aBit[i]));
-    Serial.println(row);
+    link.print(F("R ")); link.println(i);       // "mam pripraveno"
+    if (!cekejNa("K")) return false;            // Bob nastavil bazi
+    shutter.write(SERVO_OTEVRENO);              // laser sviti
+    link.println(F("P"));
+    if (!cekejNa("M")) return false;            // Bob zmeril (VALID byl HIGH)
+    shutter.write(SERVO_ZAVRENO);               // laser zakryt
+    link.println(F("Z"));
+    if (!cekejNa("D")) return false;            // detektor zhasl + 100 ms
   }
   return true;
 }
 
-void computeSifted() {
-  nSifted = 0;
-  for (int i = 0; i < N_QUBITS; i++)
-    if (bValid[i] && aBase[i] == bBase[i]) sifted[nSifted++] = i;
-}
+// ================= 2. sifting a QBER =================
+// vraci true, kdyz je klic v poradku
+bool sifting(uint16_t &klic) {
+  link.println(F("S"));                          // Bobe, rekni sve baze
+  if (!cekejNa("BB")) return false;  nactiBity(radek + 3, bobBaze);
+  if (!cekejNa("BV")) return false;  nactiBity(radek + 3, bobPlatne);
+  posliBity("AB", baze, N);                      // moje baze (ne bity!)
 
-// vraci: 1 = klic OK, 0 = Eve/chyba -> opakovat
-int classicalPhase() {
-  char hex[N_QUBITS / 4 + 1];
-  char hex2[N_QUBITS / 4 + 1];
+  // ponechame jen qubity se stejnou bazi, ktere Bob zachytil
+  byte prosete[N]; int n = 0;
+  for (int i = 0; i < N; i++)
+    if (bobPlatne[i] && baze[i] == bobBaze[i]) prosete[n++] = bit[i];
 
-  Serial.println(F("--- sifting (verejny kanal) ---"));
-  link.println(F("S"));
-  if (!expect("BB ", LINK_TIMEOUT)) return 0;       // "BB <baze> <valid>"
-  hexToBits(lineBuf + 3, bBase, N_QUBITS);
-  hexToBits(lineBuf + 4 + N_QUBITS / 4, bValid, N_QUBITS);
-
-  bitsToHex(aBase, N_QUBITS, hex);
-  link.print(F("AB ")); link.println(hex);
-
-  computeSifted();
-  Serial.print(F("Shodna baze + detekce: ")); Serial.print(nSifted);
-  Serial.print('/'); Serial.println(N_QUBITS);
-
-  int nTest = nSifted - KEY_BITS;
-  if (nTest < MIN_TEST) {
-    Serial.println(F("Malo bitu, opakuji kolo."));
-    link.println(F("FAIL"));
+  int test = n - KLIC;                           // zbytek za klicem = test
+  if (test < 8) {
+    Serial.println(F("Malo bitu, opakuji."));
     Serial.println(F("#RESULT FEW"));
-    return 0;
+    link.println(F("FAIL"));
+    return false;
   }
-
-  // odhaleni testovacich bitu (vsech prosetych za klicem)
-  uint8_t tb[N_QUBITS];
-  memset(tb, 0, sizeof(tb));
-  for (int k = 0; k < nTest; k++) tb[k] = aBit[sifted[KEY_BITS + k]];
-  bitsToHex(tb, N_QUBITS, hex2);
-  link.print(F("TB ")); link.println(hex2);
-
-  if (!expect("Q ", LINK_TIMEOUT)) return 0;        // "Q <chyby> <pocet>"
-  int err = atoi(lineBuf + 2);
-  float qber = (float)err / nTest;
-  Serial.print(F("QBER = ")); Serial.print(err); Serial.print('/');
-  Serial.print(nTest); Serial.print(F(" = "));
-  Serial.print(qber * 100, 1); Serial.println(F(" %"));
+  posliBity("TB", prosete + KLIC, test);         // testovaci bity verejne
+  if (!cekejNa("Q")) return false;               // Bob: "Q <pocet chyb>"
+  float qber = atoi(radek + 2) / (float)test;
   Serial.print(F("QBER:")); Serial.println(qber, 4);
 
-  if (qber > QBER_LIMIT) {
-    Serial.println(F("!!! QBER nad prahem - mozny odposlech (EVE). Klic zahozen."));
-    link.println(F("FAIL"));
+  if (qber > PRAH_QBER) {
+    Serial.println(F("!!! Prilis chyb - nekdo posloucha (Eve). Klic zahazuji."));
     Serial.println(F("#RESULT FAIL"));
-    return 0;
+    link.println(F("FAIL"));
+    return false;
   }
-
+  klic = 0;
+  for (int k = 0; k < KLIC; k++) klic = klic * 2 + prosete[k];
   Serial.println(F("#RESULT OK"));
-  key = 0;
-  for (int k = 0; k < KEY_BITS; k++) key = (key << 1) | aBit[sifted[k]];
   link.println(F("OK"));
-  return 1;
+  return true;
 }
 
-void runQKD() {
-  for (int round = 1; ; round++) {
-    Serial.print(F("===== KOLO ")); Serial.print(round); Serial.println(F(" ====="));
-    Serial.print(F("#ROUND ")); Serial.println(round);
-    while (link.available()) link.read();
-    if (quantumPhase() && classicalPhase() == 1) break;
+// ================= cely protokol =================
+void spustQKD() {
+  uint16_t klic;
+  for (int kolo = 1; ; kolo++) {
+    Serial.print(F("#ROUND ")); Serial.println(kolo);
+    if (kvantovaFaze() && sifting(klic)) break;
     delay(1000);
   }
-  char k[24];
-  snprintf(k, sizeof(k), "KEY:%04X", key);
-  Serial.println(k);
-  Serial.println(F("Rezim prenosu obrazku: USB -> Bob"));
-  bridge = true;
-}
+  Serial.print(F("KEY:"));
+  if (klic < 0x1000) Serial.print('0');
+  if (klic < 0x100)  Serial.print('0');
+  if (klic < 0x10)   Serial.print('0');
+  Serial.println(klic, HEX);
 
-// ================= prikazy (kalibrace) =================
-void printHelp() {
-  Serial.println(F("Prikazy: g = start QKD | o/c = shutter otevrit/zavrit"));
-  Serial.println(F("  a <deg> = HWP na uhel | j <kroky> = posun | z = nulovat"));
-  Serial.println(F("  H V D A = nastav stav | ? = napoveda"));
-}
-
-void handleCommand(char *cmd) {
-  switch (cmd[0]) {
-    case 'g': runQKD(); break;
-    case 'o': laserOn();  Serial.println(F("shutter open")); break;
-    case 'c': laserOff(); Serial.println(F("shutter closed")); break;
-    case 'a': moveHWPAbsolute((int)(atof(cmd + 1) * 10)); Serial.println(hwpPos); break;
-    case 'j': stepMotor(atol(cmd + 1)); hwpPos += atol(cmd + 1); Serial.println(hwpPos); break;
-    case 'z': hwpPos = 0; Serial.println(F("nula")); break;
-    case 'H': setHWP(HWP_ANGLE[0][0]); break;
-    case 'V': setHWP(HWP_ANGLE[0][1]); break;
-    case 'D': setHWP(HWP_ANGLE[1][0]); break;
-    case 'A': setHWP(HWP_ANGLE[1][1]); break;
-    default: printHelp();
+  // 3. prenos obrazku: co prijde z PC, posli Bobovi.
+  // Po 32 bajtech potvrdime '.', aby PC necpalo data rychleji nez linka stihne.
+  while (true) {
+    byte buf[32]; int n = 0;
+    unsigned long t = millis();
+    while (n < 32 && millis() - t < 20)
+      if (Serial.available()) { buf[n++] = Serial.read(); t = millis(); }
+    if (n > 0) { link.write(buf, n); Serial.write('.'); }
   }
 }
 
 void setup() {
-  pinMode(STEP_PIN, OUTPUT); pinMode(DIR_PIN, OUTPUT);
-  pinMode(EN_PIN, OUTPUT);   digitalWrite(EN_PIN, LOW);
+  pinMode(STEP_PIN, OUTPUT);
+  pinMode(DIR_PIN, OUTPUT);
+  pinMode(EN_PIN, OUTPUT); digitalWrite(EN_PIN, LOW);
   shutter.attach(SERVO_PIN);
-  shutter.write(SHUTTER_CLOSED);
+  shutter.write(SERVO_ZAVRENO);
   Serial.begin(115200);
   link.begin(9600);
-  seedRandom();
-  Serial.println(F("ALICE ready"));
-  printHelp();
+  randomSeed(analogRead(A2) * 31 + analogRead(A3) + micros());
+  Serial.println(F("ALICE pripravena. g = start, o/c = shutter otevrit/zavrit"));
 }
 
 void loop() {
-  if (bridge) {
-    // PC posle max 32 B, Alice je preposle a potvrdi '.' (rizeni toku -
-    // SoftwareSerial pri vysilani blokuje preruseni a USB by ztracel data)
-    uint8_t buf[32];
-    int n = 0;
-    unsigned long t0 = millis();
-    while (n < 32 && millis() - t0 < 20) {
-      if (Serial.available()) { buf[n++] = Serial.read(); t0 = millis(); }
-    }
-    if (n) { link.write(buf, n); Serial.write('.'); }
-    return;
-  }
-  if (Serial.available()) {
-    char cmd[32];
-    if (readLine(Serial, cmd, sizeof(cmd), 200)) handleCommand(cmd);
-  }
+  if (!Serial.available()) return;
+  char c = Serial.read();
+  if (c == 'g') spustQKD();
+  if (c == 'o') shutter.write(SERVO_OTEVRENO);
+  if (c == 'c') shutter.write(SERVO_ZAVRENO);
 }
